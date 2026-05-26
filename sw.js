@@ -1,15 +1,11 @@
-const CACHE = 'gestionale-v1';
+const CACHE = 'gestionale-v2';
 const ASSETS = [
-  '/',
-  '/index.html',
-  '/app.js',
-  '/style.css',
-  '/manifest.json',
-  '/data/dipendenti.json',
-  '/data/contratti.json',
-  '/data/formazione.json',
-  '/data/sorveglianza.json',
-  '/data/aziende.json'
+  './',
+  './index.html',
+  './app.js',
+  './style.css',
+  './manifest.json',
+  './data_embedded.js'
 ];
 
 self.addEventListener('install', e => {
@@ -25,7 +21,5 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  e.respondWith(
-    caches.match(e.request).then(r => r || fetch(e.request))
-  );
+  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
 });

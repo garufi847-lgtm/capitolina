@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <meta name="theme-color" content="#0f172a"/>
+  <meta name="theme-color" content="#0b0f1a"/>
   <title>Gestionale Dipendenti</title>
   <link rel="manifest" href="manifest.json"/>
   <link rel="stylesheet" href="style.css"/>
@@ -79,7 +79,7 @@
         <span class="icon">⚙</span> Gestione Utenti
       </button>
       <div style="flex:1"></div>
-      <div style="padding:12px 8px; border-top:1px solid var(--border); margin-top:8px">
+      <div style="padding:12px 8px;border-top:1px solid var(--border);margin-top:8px">
         <button class="nav-btn" onclick="App.logout()" style="color:var(--danger)">
           <span class="icon">⏻</span> Esci
         </button>
@@ -94,9 +94,7 @@
         <span class="search-icon">⌕</span>
         <input type="text" id="search-input" placeholder="Cerca..." oninput="App.search(this.value)"/>
       </div>
-      <button class="btn btn-primary" id="btn-add" style="display:none" onclick="App.openAdd()">
-        + Aggiungi
-      </button>
+      <button class="btn btn-primary" id="btn-add" style="display:none">+ Aggiungi</button>
     </div>
     <div id="content"></div>
   </div>
@@ -114,7 +112,7 @@
   </div>
 </div>
 
-<!-- Confirm overlay -->
+<!-- Confirm -->
 <div class="modal-overlay" id="confirm-overlay" onclick="App.closeConfirm(event)">
   <div class="confirm-box">
     <h3 id="confirm-title">Conferma</h3>
@@ -129,6 +127,9 @@
 <!-- Toast -->
 <div id="toast"></div>
 
+<!-- Dati incorporati (non richiedono server) -->
+<script src="data_embedded.js"></script>
+<!-- Logica applicazione -->
 <script src="app.js"></script>
 </body>
 </html>
