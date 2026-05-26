@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="theme-color" content="#0f172a"/>
+  <title>Gestionale Dipendenti</title>
+  <link rel="manifest" href="manifest.json"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Caricamento dati...</p>
+</div>
+
+<!-- Login -->
+<div id="login-screen" style="display:none">
+  <div class="login-wrap">
+    <div class="login-brand">
+      <div class="login-logo">HR</div>
+      <h1>Gestionale Dipendenti</h1>
+      <p>Accedi per continuare</p>
+    </div>
+    <div class="login-form">
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" id="login-user" placeholder="utente" autocomplete="username"/>
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="login-pass" placeholder="••••••" autocomplete="current-password"/>
+      </div>
+      <div id="login-error" class="login-error" style="display:none"></div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;padding:10px" onclick="App.login()">
+        Accedi
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app" style="display:none">
+  <aside id="sidebar">
+    <div id="sidebar-logo">
+      <h1>HR Gestionale</h1>
+      <p id="user-label">—</p>
+    </div>
+    <nav id="sidebar-nav">
+      <div class="nav-section-label">Panoramica</div>
+      <button class="nav-btn active" data-view="dashboard" onclick="App.show('dashboard')">
+        <span class="icon">◈</span> Dashboard
+      </button>
+      <div class="nav-section-label">Tabelle</div>
+      <button class="nav-btn" data-view="dipendenti" onclick="App.show('dipendenti')">
+        <span class="icon">👤</span> Dipendenti
+        <span class="badge" id="badge-dipendenti">—</span>
+      </button>
+      <button class="nav-btn" data-view="contratti" onclick="App.show('contratti')">
+        <span class="icon">📄</span> Contratti
+        <span class="badge" id="badge-contratti">—</span>
+      </button>
+      <button class="nav-btn" data-view="formazione" onclick="App.show('formazione')">
+        <span class="icon">🎓</span> Formazione
+        <span class="badge" id="badge-formazione">—</span>
+      </button>
+      <button class="nav-btn" data-view="sorveglianza" onclick="App.show('sorveglianza')">
+        <span class="icon">🏥</span> Sorveglianza San.
+        <span class="badge" id="badge-sorveglianza">—</span>
+      </button>
+      <button class="nav-btn" data-view="aziende" onclick="App.show('aziende')">
+        <span class="icon">🏢</span> Aziende
+        <span class="badge" id="badge-aziende">—</span>
+      </button>
+      <div class="nav-section-label" id="admin-section" style="display:none">Amministrazione</div>
+      <button class="nav-btn" data-view="utenti" onclick="App.show('utenti')" id="nav-utenti" style="display:none">
+        <span class="icon">⚙</span> Gestione Utenti
+      </button>
+      <div style="flex:1"></div>
+      <div style="padding:12px 8px; border-top:1px solid var(--border); margin-top:8px">
+        <button class="nav-btn" onclick="App.logout()" style="color:var(--danger)">
+          <span class="icon">⏻</span> Esci
+        </button>
+      </div>
+    </nav>
+  </aside>
+
+  <div id="main">
+    <div id="topbar">
+      <h2 id="topbar-title">Dashboard</h2>
+      <div id="search-wrap" style="display:none">
+        <span class="search-icon">⌕</span>
+        <input type="text" id="search-input" placeholder="Cerca..." oninput="App.search(this.value)"/>
+      </div>
+      <button class="btn btn-primary" id="btn-add" style="display:none" onclick="App.openAdd()">
+        + Aggiungi
+      </button>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="App.closeModal(event)">
+  <div class="modal" id="modal">
+    <div class="modal-header">
+      <h3 id="modal-title">—</h3>
+      <button class="icon-btn" onclick="App.closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+
+<!-- Confirm overlay -->
+<div class="modal-overlay" id="confirm-overlay" onclick="App.closeConfirm(event)">
+  <div class="confirm-box">
+    <h3 id="confirm-title">Conferma</h3>
+    <p id="confirm-msg"></p>
+    <div class="btns">
+      <button class="btn btn-ghost" onclick="App.closeConfirm()">Annulla</button>
+      <button class="btn btn-danger" id="confirm-ok">Elimina</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
