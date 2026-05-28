@@ -163,10 +163,10 @@ const SECTIONS = {
 
 // colonne mostrate in tabella
 const TABLE_META = {
-  dipendenti:   {label:'Dipendenti',             cols:['N° Socio','Cognome','Nome','Azienda','Mansione','Stato Dipendente','Codice Fiscale'],          status:null},
-  contratti:    {label:'Contratti di Lavoro',    cols:['Id Dipendente (N° Socio)','Cognome','Nome','Azienda','Tipologia contrattuale','Livello','Scadenza Contratto'], status:null},
-  formazione:   {label:'Formazione',             cols:['Id Dipendente (N° Socio)','Cognome','Nome','Azienda','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'], status:'Stato Corso'},
-  sorveglianza: {label:'Sorveglianza Sanitaria', cols:['Id Dipendente (N° Socio)','Cognome','Nome','Azienda','Data visita medica','Scadenza Idoneità','Stato idoneità'], status:'Stato idoneità'},
+  dipendenti:   {label:'Dipendenti',             cols:['N° Socio','Azienda','Cognome','Nome','Mansione','Stato Dipendente','Codice Fiscale'],                           status:null},
+  contratti:    {label:'Contratti di Lavoro',    cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Scadenza Contratto'],  status:null},
+  formazione:   {label:'Formazione',             cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'], status:'Stato Corso'},
+  sorveglianza: {label:'Sorveglianza Sanitaria', cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Data visita medica','Scadenza Idoneità','Stato idoneità'], status:'Stato idoneità'},
   aziende:      {label:'Anagrafica Aziende',     cols:['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO'],                                                status:null},
 };
 
