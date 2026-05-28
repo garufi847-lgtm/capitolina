@@ -438,67 +438,87 @@ const App = {
   openEdit(t,idx){ this._openForm(t,Store.getRows(t)[idx],idx); },
 
   _openForm(t,row,idx){
-    _formState={table:t, idx:idx};
+    _formState={table:t, idx:idx, cols:[]};
     document.getElementById('modal-title').textContent=(idx!==null?'✎ Modifica':'＋ Nuovo')+' — '+TABLE_META[t].label;
 
-    const allCols=Store.getCols(t);
-    const secs=SECTIONS[t]||[{t:'Campi',c:allCols.filter(c=>!SKIP.has(c))}];
+    // Only use cols that actually exist in the store
+    const allCols=Store.getCols(t).filter(c=>!SKIP.has(c)&&c!=='_id');
+    const secs=SECTIONS[t]||[{t:'Campi',c:allCols}];
 
-    // collect all cols that will appear in form
-    const usedCols=new Set();
-    let html='';
-
+    // Build an ordered list: first cols that appear in sections, then the rest
+    const ordered=[];
+    const seen=new Set();
     for(const sec of secs){
-      const visCols=sec.c.filter(c=>!SKIP.has(c)&&c!=='_id');
-      if(!visCols.length)continue;
-      html+=`<div class="form-section"><div class="form-section-title">${sec.t}</div><div class="form-grid">`;
-      for(const c of visCols){
-        usedCols.add(c);
+      for(const c of sec.c){
+        if(allCols.includes(c)&&!seen.has(c)){ ordered.push({c,sec:sec.t}); seen.add(c); }
+      }
+    }
+    for(const c of allCols){ if(!seen.has(c)){ ordered.push({c,sec:'📁 Altri campi'}); seen.add(c); } }
+
+    // Group by section title
+    const bySection={};
+    for(const {c,sec} of ordered){
+      if(!bySection[sec])bySection[sec]=[];
+      bySection[sec].push(c);
+    }
+
+    let html='';
+    for(const [secTitle,cols] of Object.entries(bySection)){
+      html+=`<div class="form-section"><div class="form-section-title">${secTitle}</div><div class="form-grid">`;
+      for(const c of cols){
         const def=FIELDS[c];
         const wide=def?.type==='radio'||def?.type==='textarea'||c.toLowerCase().includes('note')||c.toLowerCase().includes('indirizzo');
         html+=`<div class="form-group ${wide?'full':''}"><label class="field-label">${esc(c)}</label>${buildField(c,row?row[c]:'')}</div>`;
       }
       html+='</div></div>';
     }
-    // extra cols from store not covered by sections
-    const extra=allCols.filter(c=>!usedCols.has(c)&&!SKIP.has(c)&&c!=='_id');
-    if(extra.length){
-      html+='<div class="form-section"><div class="form-section-title">📁 Altri campi</div><div class="form-grid">';
-      for(const c of extra){
-        usedCols.add(c);
-        html+=`<div class="form-group"><label class="field-label">${esc(c)}</label>${buildField(c,row?row[c]:'')}</div>`;
-      }
-      html+='</div></div>';
-    }
 
-    _formState.cols=[...usedCols];
+    _formState.cols=allCols;
 
     document.getElementById('modal-body').innerHTML=html;
     document.getElementById('modal-footer').innerHTML=`
       <button class="btn btn-ghost" onclick="App.closeModal()">Annulla</button>
       <button class="btn btn-primary" id="btn-save-form">${idx!==null?'✓ Salva modifiche':'＋ Aggiungi'}</button>`;
-
-    // attach save handler DIRECTLY — no JSON in onclick!
-    document.getElementById('btn-save-form').addEventListener('click', ()=>this.saveForm());
+    document.getElementById('btn-save-form').addEventListener('click',()=>App.saveForm());
     this.openModal();
   },
 
   saveForm(){
-    const {table,cols,idx}=_formState;
-    if(!table){toast('Errore: tabella non impostata','error');return;}
-    const row={};
-    for(const c of cols){ row[c]=readField(c); }
-    if(idx!==null){
-      Store.updateRow(table,idx,row);
-      toast('Record aggiornato ✓');
-    } else {
-      Store.addRow(table,row);
-      toast('Record aggiunto ✓');
+    const {table,idx,cols}=_formState;
+    if(!table||!cols||cols.length===0){
+      toast('Errore interno: riprova','error');
+      return;
     }
-    this.closeModal();
-    const b=document.getElementById('badge-'+table);
-    if(b) b.textContent=Store.getRows(table).length;
-    this.renderTable(table);
+    const row={};
+    for(const c of cols){
+      try{
+        const def=FIELDS[c];
+        if(def?.type==='radio'){
+          const el=document.querySelector('input[name="ff_'+c.replace(/[^a-zA-Z0-9]/g,'_')+'"]:checked');
+          row[c]=el?el.value:'';
+        } else if(def?.type==='date'){
+          const el=document.getElementById('ff_'+c.replace(/[^a-zA-Z0-9]/g,'_'));
+          if(el&&el.value){
+            const p=el.value.split('-');
+            row[c]=p.length===3?p[2]+'-'+p[1]+'-'+p[0]:el.value;
+          } else { row[c]=''; }
+        } else {
+          const el=document.getElementById('ff_'+c.replace(/[^a-zA-Z0-9]/g,'_'));
+          row[c]=el?el.value:'';
+        }
+      } catch(e){ row[c]=''; }
+    }
+    try{
+      if(idx!==null){ Store.updateRow(table,idx,row); toast('Record aggiornato ✓'); }
+      else           { Store.addRow(table,row);        toast('Record aggiunto ✓'); }
+      this.closeModal();
+      const b=document.getElementById('badge-'+table);
+      if(b) b.textContent=Store.getRows(table).length;
+      this.renderTable(table);
+    } catch(e){
+      console.error('Errore saveForm:',e);
+      toast('Errore salvataggio: '+e.message,'error');
+    }
   },
 
   confirmDelete(t,idx){
