@@ -163,11 +163,11 @@ const SECTIONS = {
 
 // colonne mostrate in tabella
 const TABLE_META = {
-  dipendenti:   {label:'Dipendenti',             cols:['Cognome','Nome','Cod. Fiscale','Azienda','Mansione','Stato Dipendente','Sesso'],        status:null},
-  contratti:    {label:'Contratti di Lavoro',    cols:['Cognome e Nome','Azienda','Data inizio','Data fine','Tipologia contrattuale','Livello'], status:null},
-  formazione:   {label:'Formazione',             cols:['Cognome e Nome','Azienda','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'],status:'Stato Corso'},
-  sorveglianza: {label:'Sorveglianza Sanitaria', cols:['Cognome e Nome','Azienda','Data visita medica','Scadenza Idoneità','Stato idoneità'],   status:'Stato idoneità'},
-  aziende:      {label:'Anagrafica Aziende',     cols:['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO'],                       status:null},
+  dipendenti:   {label:'Dipendenti',             cols:['N° Socio','Cognome','Nome','Azienda','Mansione','Stato Dipendente','Codice Fiscale'],          status:null},
+  contratti:    {label:'Contratti di Lavoro',    cols:['Id Dipendente (N° Socio)','Cognome','Nome','Azienda','Tipologia contrattuale','Livello','Scadenza Contratto'], status:null},
+  formazione:   {label:'Formazione',             cols:['Id Dipendente (N° Socio)','Cognome','Nome','Azienda','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'], status:'Stato Corso'},
+  sorveglianza: {label:'Sorveglianza Sanitaria', cols:['Id Dipendente (N° Socio)','Cognome','Nome','Azienda','Data visita medica','Scadenza Idoneità','Stato idoneità'], status:'Stato idoneità'},
+  aziende:      {label:'Anagrafica Aziende',     cols:['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO'],                                                status:null},
 };
 
 const SKIP = new Set(['_id','Riepilogo Dipendente','Riepilogo Dati contrattuali','Riepilogo Formazione',
@@ -196,9 +196,31 @@ function pill(val){
 // ─── COSTRUZIONE CAMPO FORM ────────────────────────────────────────────────────
 function fid(col){ return 'ff_'+col.replace(/[^a-zA-Z0-9]/g,'_'); }
 
+
+function buildSocioDatalist(){
+  const dipRows=Store.getRows('dipendenti');
+  let opts='';
+  for(const r of dipRows){
+    const socio=r['N° Socio']||'';
+    const label=socio+(r.Cognome?' — '+r.Cognome+' '+r.Nome:'');
+    if(socio) opts+=`<option value="${esc(socio)}">${esc(label)}</option>`;
+  }
+  return `<datalist id="socio-datalist">${opts}</datalist>`;
+}
+
 function buildField(col, val){
   val = String(val??'');
   const def = FIELDS[col];
+
+  // Special: N° Socio trigger field for autofill
+  if(col==='Id Dipendente (N° Socio)'){
+    const inputId=fid(col);
+    return '<div style="display:flex;gap:8px;align-items:center">' +
+      '<input type="text" id="'+inputId+'" value="'+esc(val)+'" placeholder="es. 2081.AL" autocomplete="off" list="socio-datalist" style="flex:1" oninput="clearTimeout(this._t);this._t=setTimeout(()=>autofillFromSocio(this.value),600)"/>'+
+      '<button type="button" class="btn btn-ghost" style="padding:8px 12px;font-size:13px;white-space:nowrap" onclick="autofillFromSocio(document.getElementById('+JSON.stringify(inputId)+').value)">🔍 Carica</button>'+
+      '</div>'+
+      buildSocioDatalist();
+  }
 
   if(!def || def.type==='text'){
     return '<input type="text" id="'+fid(col)+'" value="'+esc(val)+'" placeholder="'+esc(col)+'" autocomplete="off"/>';
@@ -250,6 +272,67 @@ function readField(col){
   }
   const el=document.getElementById(fid(col));
   return el?el.value:'';
+}
+
+
+// ─── AUTOCOMPLETE N° SOCIO ────────────────────────────────────────────────────
+// Mapping from N° Socio → dipendente row for quick lookup
+function buildSocioMap(){
+  const map={};
+  for(const r of Store.getRows('dipendenti')){
+    if(r['N° Socio']) map[r['N° Socio'].trim()]=r;
+  }
+  return map;
+}
+
+// Campi da copiare dal dipendente alle altre tabelle quando si inserisce il N° Socio
+const AUTOFILL_MAP = {
+  // campo nella tabella target → campo nella tabella dipendenti
+  'Cognome':                'Cognome',
+  'Nome':                   'Nome',
+  'Azienda':                'Azienda',
+  'Stato Dipendente':       'Stato Dipendente',
+  'Stato dipendente':       'Stato Dipendente',
+  'Mansione':               'Mansione',
+  'Appalto / sede di lavoro': 'Appalto / sede di lavoro',
+  'Data di nascita':        'Data di Nascita',
+  'Luogo di nascita':       'Luogo di Nascita',
+  'Codice Fiscale':         'Codice Fiscale',
+  'Data assunzione':        'Data assunzione',
+  'Data Assunzione':        'Data assunzione',
+};
+
+function autofillFromSocio(socioVal){
+  const map=buildSocioMap();
+  const dip=map[socioVal.trim()];
+  if(!dip) return;
+  // Fill each matching field in the current form
+  for(const [targetCol, srcCol] of Object.entries(AUTOFILL_MAP)){
+    const val=dip[srcCol]||'';
+    if(!val) continue;
+    const def=FIELDS[targetCol];
+    if(def?.type==='date'){
+      const el=document.getElementById(fid(targetCol));
+      if(el){
+        // convert DD-MM-YYYY → YYYY-MM-DD for date input
+        let dval=val;
+        if(/^\d{2}[\/-]\d{2}[\/-]\d{4}$/.test(val)){const p=val.split(/[\/\-]/);dval=p[2]+'-'+p[1]+'-'+p[0];}
+        el.value=dval;
+      }
+    } else if(def?.type==='select'){
+      const el=document.getElementById(fid(targetCol));
+      if(el){
+        // try to find matching option
+        const opts=[...el.options];
+        const match=opts.find(o=>o.value.trim()===val.trim()||o.text.trim()===val.trim());
+        if(match) el.value=match.value;
+      }
+    } else {
+      const el=document.getElementById(fid(targetCol));
+      if(el) el.value=val;
+    }
+  }
+  toast('Dati dipendente precompilati ✓');
 }
 
 // ─── STATO FORM CORRENTE (evita di passare JSON in onclick) ───────────────────
