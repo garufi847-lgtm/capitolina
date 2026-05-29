@@ -163,11 +163,11 @@ const SECTIONS = {
 
 // colonne mostrate in tabella
 const TABLE_META = {
-  dipendenti:   {label:'Dipendenti',             cols:['N° Socio','Cognome','Nome','Azienda','Mansione','Stato Dipendente','Codice Fiscale'],          status:null},
-  contratti:    {label:'Contratti di Lavoro',    cols:['Id Dipendente (N° Socio)','Cognome','Nome','Azienda','Tipologia contrattuale','Livello','Scadenza Contratto'], status:null},
-  formazione:   {label:'Formazione',             cols:['Id Dipendente (N° Socio)','Cognome','Nome','Azienda','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'], status:'Stato Corso'},
-  sorveglianza: {label:'Sorveglianza Sanitaria', cols:['Id Dipendente (N° Socio)','Cognome','Nome','Azienda','Data visita medica','Scadenza Idoneità','Stato idoneità'], status:'Stato idoneità'},
-  aziende:      {label:'Anagrafica Aziende',     cols:['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO'],                                                status:null},
+  dipendenti:   {label:'Dipendenti',             cols:['N° Socio','Azienda','Cognome','Nome','Mansione','Stato Dipendente','Codice Fiscale'],                                                   status:null},
+  contratti:    {label:'Contratti di Lavoro',    cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Scadenza Contratto'],                          status:null},
+  formazione:   {label:'Formazione',             cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'],                    status:'Stato Corso'},
+  sorveglianza: {label:'Sorveglianza Sanitaria', cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Data visita medica','Scadenza Idoneità','Stato idoneità'],                        status:'Stato idoneità'},
+  aziende:      {label:'Anagrafica Aziende',     cols:['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO'],                                                                       status:null},
 };
 
 const SKIP = new Set(['_id','Riepilogo Dipendente','Riepilogo Dati contrattuali','Riepilogo Formazione',
@@ -329,12 +329,21 @@ const AUTOFILL_MAP = {
   'Data scadenza Permesso Soggiorno': 'Data scadenza Permesso Soggiorno',
   'Note permesso':                 'Note permesso',
   'Matricola':                     'N° Socio',
+  'Cognome e Nome':                '__SKIP__',
+  'Data di nascita':               'Data di Nascita',
+  'Luogo di nascita':              'Luogo di Nascita',
+  'Codice fiscale':                'Codice Fiscale',
+  'Recapito telefonico':           'Telefono Cellulare',
+  'Data Assunzione':               'Data assunzione',
 };
 
 function autofillFromSocio(socioVal){
   const map=buildSocioMap();
   const dip=map[socioVal.trim()];
   if(!dip) return;
+  // Also fill composite "Cognome e Nome" field if it exists
+  const cnEl=document.getElementById('ff_Cognome_e_Nome');
+  if(cnEl) cnEl.value=((dip['Cognome']||'')+' '+(dip['Nome']||'')).trim();
   // Fill each matching field in the current form
   for(const [targetCol, srcCol] of Object.entries(AUTOFILL_MAP)){
     const val=dip[srcCol]||'';
@@ -440,22 +449,22 @@ const App = {
     const oggi=new Date(),lim=new Date();lim.setDate(oggi.getDate()+90);
     let sc=0;S.forEach(r=>{const s=r['Scadenza Idoneità'];if(!s)return;const p=s.split(/[\/\-]/);if(p.length===3){const d=p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);if(!isNaN(d)&&d>=oggi&&d<=lim)sc++;}});
 
-    const sc_=(cl,l,v,s)=>`<div class="stat-card ${cl}"><div class="stat-label">${l}</div><div class="stat-value">${v}</div><div class="stat-sub">${s}</div></div>`;
-    const bar_=(l,n,m,c)=>`<div class="bar-item"><span class="bar-label" title="${esc(l)}">${esc(l)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/m*100)}%;background:${c}"></div></div><span class="bar-count">${n}</span></div>`;
+    const sc_=(cl,l,v,s,onclick)=>`<div class="stat-card ${cl}"${onclick?' onclick="'+onclick+'" style="cursor:pointer"':''} title="${onclick?'Clicca per dettagli':''}"><div class="stat-label">${l}</div><div class="stat-value">${v}</div><div class="stat-sub">${s}</div></div>`;
+    const bar_=(l,n,m,c,cb)=>`<div class="bar-item"${cb?' onclick="'+cb+'" style="cursor:pointer"':''} title="${cb?'Clicca per filtrare':''}"><span class="bar-label" title="${esc(l)}">${esc(l)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/m*100)}%;background:${c}"></div></div><span class="bar-count">${n}</span></div>`;
     const pan_=(t,b)=>`<div class="panel"><div class="panel-header">${t}</div><div class="panel-body">${b}</div></div>`;
 
     document.getElementById('content').innerHTML=
       '<div class="stats-grid">'+
-      sc_('blue','Dipendenti',D.length,'in anagrafica')+
-      sc_('cyan','Contratti',C.length,'rapporti di lavoro')+
-      sc_('green','Formazione',F.length,'corsi registrati')+
-      sc_('warn','Scadenze Sorveg.',sc,'entro 90 giorni')+
-      sc_('red','Sorveglianza',S.length,'visite registrate')+
-      sc_('blue','Aziende',A.length,'in anagrafica')+
+      sc_('blue','Dipendenti',D.length,'in anagrafica',"App.show('dipendenti')")+
+      sc_('cyan','Contratti',C.length,'rapporti di lavoro',"App.show('contratti')")+
+      sc_('green','Formazione',F.length,'corsi registrati',"App.show('formazione')")+
+      sc_('warn','Scadenze in scadenza',sc,'entro 90 giorni',"App.dashDetail('scadenze')")+
+      sc_('red','Sorveglianza',S.length,'visite registrate',"App.show('sorveglianza')")+
+      sc_('blue','Aziende',A.length,'in anagrafica',"App.show('aziende')")+
       '</div><div class="dash-grid">'+
-      pan_('📄 Contratti per Azienda',topAz.map(([a,n])=>bar_(a,n,mAz,'var(--accent)')).join(''))+
-      pan_('🎓 Formazione per Tipo',topF.map(([t,n])=>bar_(t,n,mF,'var(--accent2)')).join(''))+
-      pan_('🏥 Giudizi Sorveglianza',Object.entries(gC).sort((a,b)=>b[1]-a[1]).map(([g,n])=>`<div class="bar-item"><span class="bar-label">${pill(g)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/S.length*100)}%;background:var(--success)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
+      pan_('📄 Contratti per Azienda',topAz.map(([a,n])=>`<div class="bar-item" data-table="contratti" data-col="Azienda" data-val="${esc(a)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Filtra contratti per azienda"><span class="bar-label" title="${esc(a)}">${esc(a)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/mAz*100)}%;background:var(--accent)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
+      pan_('🎓 Formazione per Tipo',topF.map(([t,n])=>`<div class="bar-item" data-table="formazione" data-col="Tipologia Corso" data-val="${esc(t)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Filtra formazione per tipo"><span class="bar-label" title="${esc(t)}">${esc(t)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/mF*100)}%;background:var(--accent2)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
+      pan_('🏥 Giudizi Sorveglianza',Object.entries(gC).sort((a,b)=>b[1]-a[1]).map(([g,n],gi)=>`<div class="bar-item" data-table="sorveglianza" data-col="Stato idoneità" data-val="${esc(g)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Clicca per filtrare"><span class="bar-label">${pill(g)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/S.length*100)}%;background:var(--success)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
       pan_('📊 Riepilogo','<table style="width:100%;font-size:14px">'+
         [['Dipendenti',D.length,''],['Contratti',C.length,''],['Formazione',F.length,''],['Sorveglianza',S.length,''],['⚠ Scadenze 90gg',sc,'color:var(--warn)']].map(([l,v,s],i,a)=>
           `<tr><td style="color:var(--text3);padding:8px 0;${i<a.length-1?'border-bottom:1px solid var(--border)':''}">${l}</td><td style="text-align:right;font-weight:700;padding:8px 0;${s};${i<a.length-1?'border-bottom:1px solid var(--border)':''}">${v}</td></tr>`
@@ -492,7 +501,9 @@ const App = {
         <div class="table-toolbar">
           <span style="font-size:14px;color:var(--text2);font-weight:600">${meta.label}</span>
           <span class="record-count">${this.filter?tot+' filtrati / ':''}${all.length} totali</span>
-          <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportCSV('${t}')">↓ CSV</button>
+          <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportXLSX('${t}')">↓ Excel</button>
+          <button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>
+          <button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.clearTable('${t}')">🗑 Svuota</button>
         </div>
         <div class="table-scroll"><table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>
         <div class="pagination">
@@ -705,16 +716,166 @@ const App = {
     document.getElementById('confirm-overlay').classList.add('open');
   },
 
-  // ── CSV ────────────────────────────────────────────────────────────────────
-  exportCSV(t){
+  // ── DASHBOARD INTERACTIVITY ───────────────────────────────────────────────────
+  dashFilterEl(el){
+    const t=el.dataset.table, c=el.dataset.col, v=el.dataset.val;
+    this.dashFilter(t,c,v);
+  },
+  dashFilter(table, col, val){
+    this.show(table);
+    // apply filter
+    setTimeout(()=>{
+      this.filter=val.toLowerCase();
+      document.getElementById('search-input').value=val;
+      this.renderTable(table);
+    },50);
+  },
+
+  dashDetail(type){
+    if(type==='scadenze'){
+      // Show modal with all sorveglianza expiring in 90 days
+      const oggi=new Date(), lim=new Date(); lim.setDate(oggi.getDate()+90);
+      const rows=Store.getRows('sorveglianza').filter(r=>{
+        const s=r['Scadenza Idoneità']; if(!s)return false;
+        const p=s.split(/[\/\-]/);
+        if(p.length!==3)return false;
+        const d=p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);
+        return !isNaN(d)&&d>=oggi&&d<=lim;
+      });
+      rows.sort((a,b)=>{
+        const da=a['Scadenza Idoneità']||'',db=b['Scadenza Idoneità']||'';
+        return da.localeCompare(db);
+      });
+      document.getElementById('modal-title').textContent='⚠ Scadenze Sorveglianza — prossimi 90 giorni';
+      let html='<div class="table-scroll"><table><thead><tr><th>N° Socio</th><th>Azienda</th><th>Cognome</th><th>Nome</th><th>Scadenza Idoneità</th><th>Stato</th></tr></thead><tbody>';
+      if(!rows.length){html+='<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text3)">Nessuna scadenza nei prossimi 90 giorni 🎉</td></tr>';}
+      else{
+        rows.forEach((r,i)=>{
+          const oi=Store.getRows('sorveglianza').indexOf(r);
+          html+=`<tr style="cursor:pointer" onclick="App.closeModal();App.openView('sorveglianza',${oi})">
+            <td>${esc(r['Id Dipendente (N° Socio)']||'')}</td>
+            <td>${esc(r['Azienda']||'')}</td>
+            <td>${esc(r['Cognome']||'')}</td>
+            <td>${esc(r['Nome']||'')}</td>
+            <td style="font-weight:700;color:var(--warn)">${esc(r['Scadenza Idoneità']||'')}</td>
+            <td>${pill(r['Stato idoneità']||'')}</td>
+          </tr>`;
+        });
+      }
+      html+='</tbody></table></div>';
+      document.getElementById('modal-body').innerHTML=html;
+      document.getElementById('modal-footer').innerHTML=
+        `<button class="btn btn-ghost" style="font-size:13px" onclick="App.show('sorveglianza')">Vai alla tabella</button>`+
+        `<button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
+      this.openModal();
+    }
+  },
+
+    // ── EXPORT XLSX ─────────────────────────────────────────────────────────────
+  exportXLSX(t){
     const rows=this.filtered.length?this.filtered:Store.getRows(t);
     const cols=Store.getCols(t).filter(c=>c&&c!=='_id');
-    const lines=[cols.map(c=>'"'+c+'"').join(',')];
-    rows.forEach(r=>lines.push(cols.map(c=>'"'+String(r[c]||'').replace(/"/g,'""')+'"').join(',')));
-    const a=document.createElement('a');
-    a.href=URL.createObjectURL(new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8'}));
-    a.download=t+'_'+new Date().toISOString().slice(0,10)+'.csv';a.click();
-    toast('Export CSV completato');
+    const meta=TABLE_META[t];
+    // Build array of arrays: header + data rows
+    const data=[cols];
+    rows.forEach(r=>data.push(cols.map(c=>r[c]||'')));
+    const ws=XLSX.utils.aoa_to_sheet(data);
+    // Column widths
+    ws['!cols']=cols.map(c=>({wch:Math.max(c.length,12)}));
+    // Freeze top row
+    ws['!freeze']={xSplit:0,ySplit:1};
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,meta.label.slice(0,31));
+    XLSX.writeFile(wb,meta.label.replace(/[^a-zA-Z0-9]/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    toast('Export Excel completato ✓');
+  },
+
+  // ── IMPORT XLSX ──────────────────────────────────────────────────────────────
+  importXLSX(t){
+    const input=document.createElement('input');
+    input.type='file'; input.accept='.xlsx,.xls';
+    input.onchange=async(e)=>{
+      const file=e.target.files[0]; if(!file)return;
+      try{
+        const buf=await file.arrayBuffer();
+        const wb=XLSX.read(buf,{type:'array',cellText:true,cellDates:false,raw:false});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const raw=XLSX.utils.sheet_to_json(ws,{raw:false,defval:''});
+        if(!raw.length){toast('File vuoto o non leggibile','error');return;}
+        // Confirm
+        document.getElementById('confirm-title').textContent='Importa dati da Excel';
+        document.getElementById('confirm-msg').textContent=
+          `Trovate ${raw.length} righe nel file "${file.name}". Vuoi AGGIUNGERE ai dati esistenti oppure SOSTITUIRE tutto?`;
+        document.getElementById('confirm-ok').textContent='Sostituisci tutto';
+        document.getElementById('confirm-ok').className='btn btn-danger';
+        // Add a second button for "Aggiungi"
+        const existingBtns=document.querySelector('.confirm-box .btns');
+        const addBtn=document.createElement('button');
+        addBtn.className='btn btn-primary'; addBtn.textContent='Aggiungi';
+        existingBtns.insertBefore(addBtn,document.getElementById('confirm-ok'));
+        const doImport=(replace)=>{
+          if(replace) this.data_replace(t,raw);
+          else this.data_append(t,raw);
+          this.closeConfirm();
+          // Reset confirm button
+          document.getElementById('confirm-ok').textContent='Elimina';
+          document.getElementById('confirm-ok').className='btn btn-danger';
+          if(addBtn.parentNode) addBtn.parentNode.removeChild(addBtn);
+        };
+        addBtn.onclick=()=>doImport(false);
+        document.getElementById('confirm-ok').onclick=()=>doImport(true);
+        document.getElementById('confirm-overlay').classList.add('open');
+      }catch(err){
+        console.error(err);
+        toast('Errore lettura file: '+err.message,'error');
+      }
+    };
+    input.click();
+  },
+
+  data_replace(t,rows){
+    const cols=Store.getCols(t);
+    Store.data[t].rows=rows.map(r=>{
+      const row={};
+      cols.forEach(c=>{row[c]=String(r[c]||r[c.toLowerCase()]||'');});
+      row._id=Date.now().toString(36)+Math.random().toString(36).slice(2);
+      return row;
+    });
+    Store.save(t);
+    const b=document.getElementById('badge-'+t); if(b)b.textContent=Store.getRows(t).length;
+    this.renderTable(t);
+    toast(`Importati ${Store.getRows(t).length} record ✓`);
+  },
+
+  data_append(t,rows){
+    const cols=Store.getCols(t);
+    rows.forEach(r=>{
+      const row={};
+      cols.forEach(c=>{row[c]=String(r[c]||r[c.toLowerCase()]||'');});
+      Store.addRow(t,row);
+    });
+    const b=document.getElementById('badge-'+t); if(b)b.textContent=Store.getRows(t).length;
+    this.renderTable(t);
+    toast(`Aggiunti ${rows.length} record ✓`);
+  },
+
+  // ── SVUOTA TABELLA ────────────────────────────────────────────────────────────
+  clearTable(t){
+    document.getElementById('confirm-title').textContent='⚠ Svuota tabella';
+    document.getElementById('confirm-msg').textContent=
+      `Sei sicuro di voler eliminare TUTTI i ${Store.getRows(t).length} record di "${TABLE_META[t].label}"? Operazione irreversibile.`;
+    document.getElementById('confirm-ok').textContent='Svuota tutto';
+    document.getElementById('confirm-ok').className='btn btn-danger';
+    document.getElementById('confirm-ok').onclick=()=>{
+      Store.data[t].rows=[];
+      Store.save(t);
+      const b=document.getElementById('badge-'+t); if(b)b.textContent=0;
+      this.closeConfirm();
+      document.getElementById('confirm-ok').textContent='Elimina';
+      this.renderTable(t);
+      toast('Tabella svuotata','error');
+    };
+    document.getElementById('confirm-overlay').classList.add('open');
   },
 
   // ── MODAL ──────────────────────────────────────────────────────────────────

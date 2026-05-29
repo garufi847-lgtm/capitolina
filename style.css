@@ -608,3 +608,8 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
 /* icona occhio */
 .icon-btn.view { color: var(--accent2); }
 .icon-btn.view:hover { background: #e0f2fe; border-color: var(--accent2); color: var(--accent2); }
+
+/* ── DASHBOARD INTERACTIVA ─────────────────────────── */
+.stat-card[onclick] { transition: transform .15s, box-shadow .15s; }
+.stat-card[onclick]:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.15); }
+.bar-item[onclick]:hover { background: var(--surface2); border-radius: 8px; }
