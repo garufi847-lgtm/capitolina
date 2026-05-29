@@ -425,7 +425,11 @@ const App = {
     const sw=document.getElementById('search-wrap'), ba=document.getElementById('btn-add');
     document.getElementById('search-input').value='';
     if(v==='dashboard'){
-      sw.style.display='none'; ba.style.display='none'; this.renderDash();
+      sw.style.display='none';
+      ba.style.display='';
+      ba.textContent='📂 Importa Gestionale';
+      ba.onclick=()=>this.importXLSX('dipendenti');
+      this.renderDash();
     } else if(v==='utenti'){
       sw.style.display='none'; ba.style.display=Auth.isAdmin()?'':'none';
       ba.onclick=()=>this.openAddUser(); this.renderUsers();
@@ -791,40 +795,74 @@ const App = {
   },
 
   // ── IMPORT XLSX ──────────────────────────────────────────────────────────────
-  importXLSX(t){
+  // Mapping: foglio xlsx → chiave tabella interna
+  _sheetMap(){
+    return {
+      'Anagrafica Dipendente':  'dipendenti',
+      'Contratti di Lavoro':    'contratti',
+      'Formazione':             'formazione',
+      'Sorveglianza Sanitaria': 'sorveglianza',
+      'Anagrafica Azienda':     'aziende',
+    };
+  },
+
+  importXLSX(targetTable){
     const input=document.createElement('input');
     input.type='file'; input.accept='.xlsx,.xls';
     input.onchange=async(e)=>{
       const file=e.target.files[0]; if(!file)return;
       try{
         const buf=await file.arrayBuffer();
-        const wb=XLSX.read(buf,{type:'array',cellText:true,cellDates:false,raw:false});
-        const ws=wb.Sheets[wb.SheetNames[0]];
-        const raw=XLSX.utils.sheet_to_json(ws,{raw:false,defval:''});
-        if(!raw.length){toast('File vuoto o non leggibile','error');return;}
-        // Confirm
-        document.getElementById('confirm-title').textContent='Importa dati da Excel';
-        document.getElementById('confirm-msg').textContent=
-          `Trovate ${raw.length} righe nel file "${file.name}". Vuoi AGGIUNGERE ai dati esistenti oppure SOSTITUIRE tutto?`;
-        document.getElementById('confirm-ok').textContent='Sostituisci tutto';
-        document.getElementById('confirm-ok').className='btn btn-danger';
-        // Add a second button for "Aggiungi"
-        const existingBtns=document.querySelector('.confirm-box .btns');
-        const addBtn=document.createElement('button');
-        addBtn.className='btn btn-primary'; addBtn.textContent='Aggiungi';
-        existingBtns.insertBefore(addBtn,document.getElementById('confirm-ok'));
-        const doImport=(replace)=>{
-          if(replace) this.data_replace(t,raw);
-          else this.data_append(t,raw);
-          this.closeConfirm();
-          // Reset confirm button
-          document.getElementById('confirm-ok').textContent='Elimina';
+        const wb=XLSX.read(buf,{type:'array',raw:false,cellDates:false,cellText:true});
+        const sheetMap=this._sheetMap();
+
+        // Detect if this is the full multi-sheet gestionale or a single sheet
+        const matchedSheets=wb.SheetNames.filter(n=>sheetMap[n]);
+        const isFullFile=matchedSheets.length>1;
+
+        if(isFullFile){
+          // Multi-sheet: import all sheets at once
+          const preview=matchedSheets.map(n=>{
+            const ws=wb.Sheets[n];
+            const rows=XLSX.utils.sheet_to_json(ws,{raw:false,defval:''});
+            return `• ${n}: ${rows.length} righe`;
+          }).join('\n');
+          document.getElementById('confirm-title').textContent='📂 Importa Gestionale Completo';
+          document.getElementById('confirm-msg').textContent=
+            `Trovati ${matchedSheets.length} fogli nel file "${file.name}":\n${preview}\n\nSostituisce TUTTI i dati esistenti.`;
+          this._setupConfirmBtns('Importa tutto',()=>{
+            let total=0;
+            for(const sheetName of matchedSheets){
+              const t=sheetMap[sheetName];
+              const ws=wb.Sheets[sheetName];
+              const rows=XLSX.utils.sheet_to_json(ws,{raw:false,defval:''});
+              this._doReplace(t,rows);
+              total+=rows.length;
+            }
+            toast(`Importati ${total} record su ${matchedSheets.length} tabelle ✓`);
+          });
+        } else {
+          // Single sheet: import into target table
+          const sheetName=wb.SheetNames[0];
+          const ws=wb.Sheets[sheetName];
+          const rows=XLSX.utils.sheet_to_json(ws,{raw:false,defval:''});
+          if(!rows.length){toast('File vuoto','error');return;}
+          const tableName=sheetMap[sheetName]||targetTable;
+          document.getElementById('confirm-title').textContent='Importa dati';
+          document.getElementById('confirm-msg').textContent=
+            `Trovate ${rows.length} righe in "${sheetName}".\nAggiungere ai dati esistenti o sostituire tutto?`;
+          const existingBtns=document.querySelector('.confirm-box .btns');
+          // Add "Aggiungi" button
+          let addBtn=document.getElementById('_addBtn');
+          if(!addBtn){addBtn=document.createElement('button');addBtn.id='_addBtn';existingBtns.insertBefore(addBtn,document.getElementById('confirm-ok'));}
+          addBtn.className='btn btn-primary';addBtn.textContent='Aggiungi';addBtn.style.display='';
+          addBtn.onclick=()=>{this._doAppend(tableName,rows);this._resetConfirm();this.closeConfirm();};
+          document.getElementById('confirm-ok').textContent='Sostituisci';
           document.getElementById('confirm-ok').className='btn btn-danger';
-          if(addBtn.parentNode) addBtn.parentNode.removeChild(addBtn);
-        };
-        addBtn.onclick=()=>doImport(false);
-        document.getElementById('confirm-ok').onclick=()=>doImport(true);
-        document.getElementById('confirm-overlay').classList.add('open');
+          document.getElementById('confirm-ok').onclick=()=>{this._doReplace(tableName,rows);this._resetConfirm();this.closeConfirm();};
+          document.getElementById('confirm-overlay').classList.add('open');
+          return;
+        }
       }catch(err){
         console.error(err);
         toast('Errore lettura file: '+err.message,'error');
@@ -833,31 +871,86 @@ const App = {
     input.click();
   },
 
-  data_replace(t,rows){
-    const cols=Store.getCols(t);
-    Store.data[t].rows=rows.map(r=>{
-      const row={};
-      cols.forEach(c=>{row[c]=String(r[c]||r[c.toLowerCase()]||'');});
+  _setupConfirmBtns(label, fn){
+    // Hide extra add button if visible
+    const ab=document.getElementById('_addBtn'); if(ab)ab.style.display='none';
+    document.getElementById('confirm-ok').textContent=label;
+    document.getElementById('confirm-ok').className='btn btn-primary';
+    document.getElementById('confirm-ok').onclick=()=>{fn();this._resetConfirm();this.closeConfirm();};
+    document.getElementById('confirm-overlay').classList.add('open');
+  },
+
+  _resetConfirm(){
+    const ab=document.getElementById('_addBtn'); if(ab)ab.style.display='none';
+    document.getElementById('confirm-ok').textContent='Elimina';
+    document.getElementById('confirm-ok').className='btn btn-danger';
+  },
+
+  // Mappa riga xlsx → riga interna, gestendo nomi colonna esatti e varianti
+  _mapRow(t, rawRow){
+    const storeCols=Store.getCols(t);
+    const row={};
+
+    // Normalizza le chiavi della riga raw per confronto case-insensitive
+    const rawKeys=Object.keys(rawRow);
+    const rawLower={};
+    rawKeys.forEach(k=>{ rawLower[k.toLowerCase().trim()]=k; });
+
+    for(const col of storeCols){
+      // 1. Corrispondenza esatta
+      if(rawRow[col]!==undefined){ row[col]=String(rawRow[col]||''); continue; }
+      // 2. Corrispondenza case-insensitive
+      const lc=col.toLowerCase().trim();
+      if(rawLower[lc]){ row[col]=String(rawRow[rawLower[lc]]||''); continue; }
+      // 3. Varianti note
+      const aliases={
+        'n° socio':          ['n socio','n.socio','nsocio','numero socio','n° socio'],
+        'id dipendente (n° socio)': ['id dipendente','id_dipendente','n° socio','n socio'],
+        'codice fiscale':    ['codice fiscale','codicefiscale','cf'],
+        'codice fiscale':    ['codice fiscale','codice_fiscale'],
+        'stato dipendente':  ['stato dipendente','stato_dipendente'],
+        'stato dipendente':  ['stato dipendente'],
+        'data assunzione':   ['data assunzione','data_assunzione'],
+        'tipologia corso':   ['tipo formazione','tipologia corso'],
+        'scadenza idoneità': ['scadenza idoneita','scadenza idoneit'],
+        'stato idoneità':    ['stato idoneita','stato idoneit'],
+      };
+      const found=Object.entries(aliases).find(([k])=>k===lc);
+      if(found){
+        for(const alias of found[1]){
+          if(rawLower[alias]){row[col]=String(rawRow[rawLower[alias]]||'');break;}
+        }
+        if(row[col]===undefined)row[col]='';
+        continue;
+      }
+      row[col]='';
+    }
+    return row;
+  },
+
+  _doReplace(t,rawRows){
+    Store.data[t].rows=rawRows.map(r=>{
+      const row=this._mapRow(t,r);
       row._id=Date.now().toString(36)+Math.random().toString(36).slice(2);
       return row;
     });
     Store.save(t);
     const b=document.getElementById('badge-'+t); if(b)b.textContent=Store.getRows(t).length;
-    this.renderTable(t);
-    toast(`Importati ${Store.getRows(t).length} record ✓`);
+    if(this.table===t) this.renderTable(t);
   },
 
-  data_append(t,rows){
-    const cols=Store.getCols(t);
-    rows.forEach(r=>{
-      const row={};
-      cols.forEach(c=>{row[c]=String(r[c]||r[c.toLowerCase()]||'');});
+  _doAppend(t,rawRows){
+    rawRows.forEach(r=>{
+      const row=this._mapRow(t,r);
       Store.addRow(t,row);
     });
     const b=document.getElementById('badge-'+t); if(b)b.textContent=Store.getRows(t).length;
-    this.renderTable(t);
-    toast(`Aggiunti ${rows.length} record ✓`);
+    if(this.table===t) this.renderTable(t);
   },
+
+  // Kept for backward compat
+  data_replace(t,rows){ this._doReplace(t,rows); },
+  data_append(t,rows){ this._doAppend(t,rows); },
 
   // ── SVUOTA TABELLA ────────────────────────────────────────────────────────────
   clearTable(t){
