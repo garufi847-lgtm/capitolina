@@ -428,13 +428,16 @@ const App = {
       sw.style.display='none';
       ba.style.display='';
       ba.textContent='📂 Importa Gestionale';
+      ba.className='btn btn-primary';
       ba.onclick=()=>this.importXLSX('dipendenti');
       this.renderDash();
     } else if(v==='utenti'){
       sw.style.display='none'; ba.style.display=Auth.isAdmin()?'':'none';
+      ba.textContent='+ Aggiungi'; ba.className='btn btn-primary';
       ba.onclick=()=>this.openAddUser(); this.renderUsers();
     } else {
       this.table=v; sw.style.display=''; ba.style.display=Auth.canEdit()?'':'none';
+      ba.textContent='+ Aggiungi'; ba.className='btn btn-primary';
       ba.onclick=()=>this.openAdd(); this.renderTable(v);
     }
   },
