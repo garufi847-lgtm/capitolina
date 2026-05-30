@@ -510,6 +510,7 @@ const App = {
           <span class="record-count">${this.filter?tot+' filtrati / ':''}${all.length} totali</span>
           <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportXLSX('${t}')">↓ Excel</button>
           <button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>
+          <button class="btn btn-ghost" style="font-size:13px" onclick="App.printTable('${t}')">🖨 Stampa</button>
           <button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.clearTable('${t}')">🗑 Svuota</button>
         </div>
         <div class="table-scroll"><table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>
@@ -776,6 +777,61 @@ const App = {
         `<button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
       this.openModal();
     }
+  },
+
+    // ── STAMPA ───────────────────────────────────────────────────────────────────
+  printTable(t){
+    const rows = this.filtered.length ? this.filtered : Store.getRows(t);
+    const cols = Store.getCols(t).filter(c => c && c !== '_id');
+    const meta = TABLE_META[t];
+    const oggi = new Date().toLocaleDateString('it-IT');
+
+    const thead = cols.map(c => `<th>${esc(c)}</th>`).join('');
+    const tbody = rows.map(r =>
+      '<tr>' + cols.map(c => `<td>${esc(r[c]||'')}</td>`).join('') + '</tr>'
+    ).join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8"/>
+  <title>${meta.label}</title>
+  <style>
+    @page { size: A4 landscape; margin: 12mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 9px; color: #111; }
+    .header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 10px; border-bottom: 2px solid #1F4E79; padding-bottom: 6px; }
+    .header h1 { font-size: 14px; font-weight: 800; color: #1F4E79; }
+    .header p  { font-size: 9px; color: #555; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #1F4E79; color: #fff; padding: 5px 6px; text-align: left; font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+    td { padding: 4px 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; word-break: break-word; max-width: 120px; }
+    tr:nth-child(even) td { background: #EBF3FB; }
+    tr:hover td { background: #dbeafe; }
+    .footer { margin-top: 8px; font-size: 8px; color: #888; text-align: right; }
+    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>${meta.label}</h1>
+      <p>${rows.length} record${this.filterText ? ' (filtrati)' : ''}</p>
+    </div>
+    <p>Stampato il ${oggi}</p>
+  </div>
+  <table>
+    <thead><tr>${thead}</tr></thead>
+    <tbody>${tbody}</tbody>
+  </table>
+  <div class="footer">Gestionale Dipendenti — ${oggi}</div>
+  <script>window.onload=()=>{window.print();window.onafterprint=()=>window.close();}<\/script>
+</body>
+</html>`;
+
+    const w = window.open('', '_blank');
+    w.document.write(html);
+    w.document.close();
   },
 
     // ── EXPORT XLSX ─────────────────────────────────────────────────────────────
