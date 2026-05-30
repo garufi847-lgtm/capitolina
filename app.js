@@ -455,6 +455,7 @@ const App = {
     const gC={};S.forEach(r=>{const g=r['Stato idoneità']||'N/D';gC[g]=(gC[g]||0)+1;});
     const oggi=new Date(),lim=new Date();lim.setDate(oggi.getDate()+90);
     let sc=0;S.forEach(r=>{const s=r['Scadenza Idoneità'];if(!s)return;const p=s.split(/[\/\-]/);if(p.length===3){const d=p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);if(!isNaN(d)&&d>=oggi&&d<=lim)sc++;}});
+    let pp=0;D.forEach(r=>{const tp=r['Tipo permesso'];if(tp&&tp.trim()&&tp!=='nan')pp++;});
     let ps=0;D.forEach(r=>{const s=r['Data scadenza Permesso Soggiorno'];if(!s)return;const p=s.split(/[\/\-]/);if(p.length===3){const d=p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);if(!isNaN(d)&&d>=oggi&&d<=lim)ps++;}});
 
     const sc_=(cl,l,v,s,onclick)=>`<div class="stat-card ${cl}"${onclick?' onclick="'+onclick+'" style="cursor:pointer"':''} title="${onclick?'Clicca per dettagli':''}"><div class="stat-label">${l}</div><div class="stat-value">${v}</div><div class="stat-sub">${s}</div></div>`;
@@ -466,10 +467,11 @@ const App = {
       sc_('blue','Dipendenti',D.length,'in anagrafica',"App.show('dipendenti')")+
       sc_('cyan','Contratti',C.length,'rapporti di lavoro',"App.show('contratti')")+
       sc_('green','Formazione',F.length,'corsi registrati',"App.show('formazione')")+
-      sc_('warn','Scadenze in scadenza',sc,'entro 90 giorni',"App.dashDetail('scadenze')")+
+      sc_('warn','Scadenze Sorveglianza',sc,'entro 90 giorni',"App.dashDetail('scadenze')")+
       sc_('red','Sorveglianza',S.length,'visite registrate',"App.show('sorveglianza')")+
       sc_('blue','Aziende',A.length,'in anagrafica',"App.show('aziende')")+
-      sc_('red','Scadenze Permesso',ps,'entro 90 giorni',"App.dashDetail('permessi'"+")")+
+      sc_('red','Scadenze Permesso',ps,'entro 90 giorni',"App.dashDetail('permessi')")+
+      sc_('cyan','Permessi Soggiorno',pp,'dipendenti con permesso',"App.dashDetail('tutti_permessi')")+
       '</div><div class="dash-grid">'+
       pan_('📄 Contratti per Azienda',topAz.map(([a,n])=>`<div class="bar-item" data-table="contratti" data-col="Azienda" data-val="${esc(a)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Filtra contratti per azienda"><span class="bar-label" title="${esc(a)}">${esc(a)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/mAz*100)}%;background:var(--accent)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
       pan_('🎓 Formazione per Tipo',topF.map(([t,n])=>`<div class="bar-item" data-table="formazione" data-col="Tipologia Corso" data-val="${esc(t)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Filtra formazione per tipo"><span class="bar-label" title="${esc(t)}">${esc(t)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/mF*100)}%;background:var(--accent2)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
@@ -775,7 +777,8 @@ const App = {
       html+='</tbody></table></div>';
       document.getElementById('modal-body').innerHTML=html;
       document.getElementById('modal-footer').innerHTML=
-        `<button class="btn btn-ghost" style="font-size:13px" onclick="App.show('sorveglianza')">Vai alla tabella</button>`+
+        `<button class="btn btn-ghost" onclick="App.printScadenze('sorveglianza')">🖨 Stampa lista</button>`+
+        `<button class="btn btn-ghost" onclick="App.show('sorveglianza')">Vai alla tabella</button>`+
         `<button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
       this.openModal();
     } else if(type==='permessi'){
@@ -813,10 +816,146 @@ const App = {
       html+='</tbody></table></div>';
       document.getElementById('modal-body').innerHTML=html;
       document.getElementById('modal-footer').innerHTML=
+        `<button class="btn btn-ghost" onclick="App.printScadenze('permessi')">🖨 Stampa lista</button>`+
+        `<button class="btn btn-ghost" onclick="App.show('dipendenti')">Vai ai Dipendenti</button>`+
+        `<button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
+      this.openModal();
+    } else if(type==='tutti_permessi'){
+      // Tutti i dipendenti con permesso di soggiorno
+      const tutti=Store.getRows('dipendenti').filter(r=>{
+        const tp=r['Tipo permesso']; return tp&&tp.trim()&&tp!=='nan';
+      });
+      const oggi2=new Date(), lim90=new Date(); lim90.setDate(oggi2.getDate()+90);
+      function parseDate(s){
+        if(!s)return null;
+        const p=s.split(/[\/\-]/);
+        if(p.length!==3)return null;
+        return p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);
+      }
+      tutti.sort((a,b)=>{
+        const da=parseDate(a['Data scadenza Permesso Soggiorno']),db=parseDate(b['Data scadenza Permesso Soggiorno']);
+        if(da&&db)return da-db;
+        if(da)return -1; if(db)return 1;
+        return 0;
+      });
+      document.getElementById('modal-title').textContent='🌍 Tutti i Permessi di Soggiorno ('+tutti.length+')';
+      let html='<div class="table-scroll"><table><thead><tr><th>N° Socio</th><th>Azienda</th><th>Cognome</th><th>Nome</th><th>Tipo Permesso</th><th>Scadenza</th><th>Stato</th></tr></thead><tbody>';
+      tutti.forEach(r=>{
+        const oi=Store.getRows('dipendenti').indexOf(r);
+        const scad=r['Data scadenza Permesso Soggiorno']||'';
+        const d=parseDate(scad);
+        const scaduto=d&&d<oggi2;
+        const urgente=d&&d>=oggi2&&d<=lim90;
+        const stato=scaduto?'<span class="pill pill-red">SCADUTO</span>':urgente?'<span class="pill pill-yellow">IN SCADENZA</span>':'<span class="pill pill-green">VALIDO</span>';
+        html+=`<tr style="cursor:pointer" onclick="App.closeModal();App.openView('dipendenti',${oi})">
+          <td>${esc(r['N° Socio']||'')}</td>
+          <td>${esc(r['Azienda']||'')}</td>
+          <td>${esc(r['Cognome']||'')}</td>
+          <td>${esc(r['Nome']||'')}</td>
+          <td>${esc(r['Tipo permesso']||'')}</td>
+          <td style="font-weight:700;color:${scaduto?'var(--danger)':urgente?'var(--warn)':'var(--success)'}">${esc(scad)}</td>
+          <td>${stato}</td>
+        </tr>`;
+      });
+      html+='</tbody></table></div>';
+      document.getElementById('modal-body').innerHTML=html;
+      document.getElementById('modal-footer').innerHTML=
+        `<button class="btn btn-ghost" onclick="App.printScadenze('permessi_tutti')">🖨 Stampa lista</button>`+
         `<button class="btn btn-ghost" onclick="App.show('dipendenti')">Vai ai Dipendenti</button>`+
         `<button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
       this.openModal();
     }
+  },
+
+  // ── STAMPA SCADENZE ─────────────────────────────────────────────────────────
+  printScadenze(tipo){
+    const oggi=new Date(), lim90=new Date(); lim90.setDate(oggi.getDate()+90);
+    const oggiStr=oggi.toLocaleDateString('it-IT');
+    function parseDate(s){
+      if(!s)return null;
+      const p=s.split(/[\/\-]/);
+      if(p.length!==3)return null;
+      return p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);
+    }
+
+    let title, rows, cols, colDefs;
+
+    if(tipo==='sorveglianza'){
+      title='Scadenze Sorveglianza Sanitaria — prossimi 90 giorni';
+      rows=Store.getRows('sorveglianza').filter(r=>{
+        const d=parseDate(r['Scadenza Idoneità']); return d&&d>=oggi&&d<=lim90;
+      }).sort((a,b)=>(parseDate(a['Scadenza Idoneità'])||0)-(parseDate(b['Scadenza Idoneità'])||0));
+      cols=['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Mansione','Data visita medica','Scadenza Idoneità','Stato idoneità','Medico'];
+    } else if(tipo==='permessi'){
+      title='Scadenze Permesso di Soggiorno — prossimi 90 giorni';
+      rows=Store.getRows('dipendenti').filter(r=>{
+        const d=parseDate(r['Data scadenza Permesso Soggiorno']); return d&&d>=oggi&&d<=lim90;
+      }).sort((a,b)=>(parseDate(a['Data scadenza Permesso Soggiorno'])||0)-(parseDate(b['Data scadenza Permesso Soggiorno'])||0));
+      cols=['N° Socio','Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Data scadenza Permesso Soggiorno'];
+    } else if(tipo==='permessi_tutti'){
+      title='Tutti i Permessi di Soggiorno';
+      rows=Store.getRows('dipendenti').filter(r=>{
+        const tp=r['Tipo permesso']; return tp&&tp.trim()&&tp!=='nan';
+      }).sort((a,b)=>(parseDate(a['Data scadenza Permesso Soggiorno'])||0)-(parseDate(b['Data scadenza Permesso Soggiorno'])||0));
+      cols=['N° Socio','Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Data scadenza Permesso Soggiorno'];
+    }
+
+    const allCols=Store.getCols(tipo==='sorveglianza'?'sorveglianza':'dipendenti');
+    const printCols=cols.filter(c=>allCols.includes(c));
+    const thead=printCols.map(c=>`<th>${esc(c)}</th>`).join('');
+    const tbody=rows.map(r=>{
+      return '<tr>'+printCols.map(c=>{
+        const v=String(r[c]||'');
+        // Highlight expiring dates
+        const isDateCol=c.toLowerCase().includes('scadenza');
+        const d=isDateCol?parseDate(v):null;
+        const scaduto=d&&d<oggi;
+        const urgente=d&&d>=oggi&&d<=lim90;
+        const style=scaduto?'color:#dc2626;font-weight:700':urgente?'color:#d97706;font-weight:700':'';
+        return `<td${style?` style="${style}"`:''}>` + esc(v) + '</td>';
+      }).join('')+'</tr>';
+    }).join('');
+
+    const html=`<!DOCTYPE html>
+<html lang="it"><head><meta charset="UTF-8"/>
+<title>${title}</title>
+<style>
+  @page{size:A4 landscape;margin:8mm 8mm 10mm 8mm;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:Arial,sans-serif;font-size:8px;color:#111;}
+  .header{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:8px;border-bottom:2px solid #1F4E79;padding-bottom:5px;}
+  .header h1{font-size:13px;font-weight:800;color:#1F4E79;}
+  .header p{font-size:8px;color:#555;}
+  table{width:100%;border-collapse:collapse;table-layout:fixed;}
+  th{background:#1F4E79;color:#fff;padding:4px 5px;text-align:left;font-size:7px;font-weight:700;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  td{padding:4px 5px;border-bottom:1px solid #e5e7eb;vertical-align:top;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  tr:nth-child(even) td{background:#EBF3FB;}
+  .footer{margin-top:6px;font-size:7px;color:#999;display:flex;justify-content:space-between;}
+  .legend{margin-top:5px;font-size:7.5px;display:flex;gap:16px;}
+  .leg{display:flex;align-items:center;gap:4px;}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+  @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}thead{display:table-header-group;}tr{page-break-inside:avoid;}}
+</style>
+</head>
+<body>
+  <div class="header">
+    <div><h1>${title}</h1><p>${rows.length} record</p></div>
+    <p>Stampato il ${oggiStr}</p>
+  </div>
+  <table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>
+  <div class="legend">
+    <div class="leg"><div class="dot" style="background:#dc2626"></div> Scaduto</div>
+    <div class="leg"><div class="dot" style="background:#d97706"></div> In scadenza entro 90gg</div>
+    <div class="leg"><div class="dot" style="background:#16a34a"></div> Valido</div>
+  </div>
+  <div class="footer"><span>Gestionale Dipendenti</span><span>${rows.length} record — ${oggiStr}</span></div>
+  <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
+</body></html>`;
+
+    const w=window.open('','_blank');
+    if(!w){toast('Abilita i popup per stampare','error');return;}
+    w.document.write(html);
+    w.document.close();
   },
 
   // ── STAMPA ───────────────────────────────────────────────────────────────────
