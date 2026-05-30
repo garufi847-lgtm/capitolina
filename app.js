@@ -455,6 +455,7 @@ const App = {
     const gC={};S.forEach(r=>{const g=r['Stato idoneità']||'N/D';gC[g]=(gC[g]||0)+1;});
     const oggi=new Date(),lim=new Date();lim.setDate(oggi.getDate()+90);
     let sc=0;S.forEach(r=>{const s=r['Scadenza Idoneità'];if(!s)return;const p=s.split(/[\/\-]/);if(p.length===3){const d=p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);if(!isNaN(d)&&d>=oggi&&d<=lim)sc++;}});
+    let ps=0;D.forEach(r=>{const s=r['Data scadenza Permesso Soggiorno'];if(!s)return;const p=s.split(/[\/\-]/);if(p.length===3){const d=p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);if(!isNaN(d)&&d>=oggi&&d<=lim)ps++;}});
 
     const sc_=(cl,l,v,s,onclick)=>`<div class="stat-card ${cl}"${onclick?' onclick="'+onclick+'" style="cursor:pointer"':''} title="${onclick?'Clicca per dettagli':''}"><div class="stat-label">${l}</div><div class="stat-value">${v}</div><div class="stat-sub">${s}</div></div>`;
     const bar_=(l,n,m,c,cb)=>`<div class="bar-item"${cb?' onclick="'+cb+'" style="cursor:pointer"':''} title="${cb?'Clicca per filtrare':''}"><span class="bar-label" title="${esc(l)}">${esc(l)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/m*100)}%;background:${c}"></div></div><span class="bar-count">${n}</span></div>`;
@@ -468,6 +469,7 @@ const App = {
       sc_('warn','Scadenze in scadenza',sc,'entro 90 giorni',"App.dashDetail('scadenze')")+
       sc_('red','Sorveglianza',S.length,'visite registrate',"App.show('sorveglianza')")+
       sc_('blue','Aziende',A.length,'in anagrafica',"App.show('aziende')")+
+      sc_('red','Scadenze Permesso',ps,'entro 90 giorni',"App.dashDetail('permessi'"+")")+
       '</div><div class="dash-grid">'+
       pan_('📄 Contratti per Azienda',topAz.map(([a,n])=>`<div class="bar-item" data-table="contratti" data-col="Azienda" data-val="${esc(a)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Filtra contratti per azienda"><span class="bar-label" title="${esc(a)}">${esc(a)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/mAz*100)}%;background:var(--accent)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
       pan_('🎓 Formazione per Tipo',topF.map(([t,n])=>`<div class="bar-item" data-table="formazione" data-col="Tipologia Corso" data-val="${esc(t)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Filtra formazione per tipo"><span class="bar-label" title="${esc(t)}">${esc(t)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/mF*100)}%;background:var(--accent2)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
@@ -776,19 +778,82 @@ const App = {
         `<button class="btn btn-ghost" style="font-size:13px" onclick="App.show('sorveglianza')">Vai alla tabella</button>`+
         `<button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
       this.openModal();
+    } else if(type==='permessi'){
+      const oggi=new Date(), lim=new Date(); lim.setDate(oggi.getDate()+90);
+      const rows=Store.getRows('dipendenti').filter(r=>{
+        const s=r['Data scadenza Permesso Soggiorno']; if(!s)return false;
+        const p=s.split(/[\/\-]/);
+        if(p.length!==3)return false;
+        const d=p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);
+        return !isNaN(d)&&d>=oggi&&d<=lim;
+      });
+      rows.sort((a,b)=>(a['Data scadenza Permesso Soggiorno']||'').localeCompare(b['Data scadenza Permesso Soggiorno']||''));
+      document.getElementById('modal-title').textContent='🌍 Scadenze Permesso di Soggiorno — prossimi 90 giorni';
+      let html='<div class="table-scroll"><table><thead><tr><th>N° Socio</th><th>Azienda</th><th>Cognome</th><th>Nome</th><th>Tipo Permesso</th><th>Scadenza</th></tr></thead><tbody>';
+      if(!rows.length){
+        html+='<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text3)">Nessun permesso in scadenza nei prossimi 90 giorni 🎉</td></tr>';
+      } else {
+        rows.forEach(r=>{
+          const oi=Store.getRows('dipendenti').indexOf(r);
+          const scad=r['Data scadenza Permesso Soggiorno']||'';
+          const lim30=new Date(); lim30.setDate(new Date().getDate()+30);
+          const pts=scad.split(/[\/\-]/);
+          const d=pts.length===3?(pts[0].length===4?new Date(pts[0]+'-'+pts[1]+'-'+pts[2]):new Date(pts[2]+'-'+pts[1]+'-'+pts[0])):null;
+          const urgente=d&&d<=lim30;
+          html+=`<tr style="cursor:pointer" onclick="App.closeModal();App.openView('dipendenti',${oi})">
+            <td>${esc(r['N° Socio']||'')}</td>
+            <td>${esc(r['Azienda']||'')}</td>
+            <td>${esc(r['Cognome']||'')}</td>
+            <td>${esc(r['Nome']||'')}</td>
+            <td>${esc(r['Tipo permesso']||'')}</td>
+            <td style="font-weight:700;color:${urgente?'var(--danger)':'var(--warn)'}">${esc(scad)}</td>
+          </tr>`;
+        });
+      }
+      html+='</tbody></table></div>';
+      document.getElementById('modal-body').innerHTML=html;
+      document.getElementById('modal-footer').innerHTML=
+        `<button class="btn btn-ghost" onclick="App.show('dipendenti')">Vai ai Dipendenti</button>`+
+        `<button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
+      this.openModal();
     }
   },
 
-    // ── STAMPA ───────────────────────────────────────────────────────────────────
+  // ── STAMPA ───────────────────────────────────────────────────────────────────
   printTable(t){
     const rows = this.filtered.length ? this.filtered : Store.getRows(t);
-    const cols = Store.getCols(t).filter(c => c && c !== '_id');
     const meta = TABLE_META[t];
     const oggi = new Date().toLocaleDateString('it-IT');
 
+    // Colonne da stampare per tabella (le più significative, max ~10 per stare in A4)
+    const PRINT_COLS = {
+      dipendenti:   ['N° Socio','Azienda','Cognome','Nome','Codice Fiscale','Mansione','Stato Dipendente','Telefono Cellulare','Email'],
+      contratti:    ['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Tipologia orario contrattuale','Livello','Data inizio','Data fine','Scadenza Contratto'],
+      formazione:   ['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso','Ore'],
+      sorveglianza: ['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Data visita medica','Scadenza Idoneità','Stato idoneità','Medico','Analisi'],
+      aziende:      ['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO','PAT','Posizione INPS'],
+    };
+
+    // Usa solo colonne che esistono nello store
+    const allCols = Store.getCols(t);
+    const wantedCols = (PRINT_COLS[t] || meta.cols);
+    const cols = wantedCols.filter(c => allCols.includes(c));
+
+    // Calcola larghezza colonne in % in base alla lunghezza max dei valori
+    const widths = cols.map(c => {
+      const maxLen = Math.max(c.length, ...rows.slice(0,50).map(r => String(r[c]||'').length));
+      return Math.min(maxLen, 20);
+    });
+    const totalW = widths.reduce((a,b)=>a+b,0);
+    const pcts = widths.map(w => Math.max(5, Math.round(w/totalW*100)));
+
+    const colgroup = cols.map((c,i) => `<col style="width:${pcts[i]}%"/>`).join('');
     const thead = cols.map(c => `<th>${esc(c)}</th>`).join('');
     const tbody = rows.map(r =>
-      '<tr>' + cols.map(c => `<td>${esc(r[c]||'')}</td>`).join('') + '</tr>'
+      '<tr>' + cols.map(c => {
+        const v = String(r[c]||'');
+        return `<td>${esc(v)}</td>`;
+      }).join('') + '</tr>'
     ).join('');
 
     const html = `<!DOCTYPE html>
@@ -797,39 +862,47 @@ const App = {
   <meta charset="UTF-8"/>
   <title>${meta.label}</title>
   <style>
-    @page { size: A4 landscape; margin: 12mm; }
+    @page { size: A4 landscape; margin: 8mm 8mm 10mm 8mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; font-size: 9px; color: #111; }
-    .header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 10px; border-bottom: 2px solid #1F4E79; padding-bottom: 6px; }
-    .header h1 { font-size: 14px; font-weight: 800; color: #1F4E79; }
-    .header p  { font-size: 9px; color: #555; }
-    table { width: 100%; border-collapse: collapse; }
-    th { background: #1F4E79; color: #fff; padding: 5px 6px; text-align: left; font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
-    td { padding: 4px 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; word-break: break-word; max-width: 120px; }
-    tr:nth-child(even) td { background: #EBF3FB; }
-    tr:hover td { background: #dbeafe; }
-    .footer { margin-top: 8px; font-size: 8px; color: #888; text-align: right; }
-    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+    body { font-family: Arial, sans-serif; font-size: 7.5px; color: #111; }
+    .header { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:6px; border-bottom:2px solid #1F4E79; padding-bottom:5px; }
+    .header h1 { font-size:13px; font-weight:800; color:#1F4E79; }
+    .header p  { font-size:8px; color:#555; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; }
+    th { background:#1F4E79; color:#fff; padding:4px 4px; text-align:left; font-size:7px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    td { padding:3px 4px; border-bottom:1px solid #e5e7eb; vertical-align:top; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    tr:nth-child(even) td { background:#EBF3FB; }
+    .footer { margin-top:5px; font-size:7px; color:#999; display:flex; justify-content:space-between; }
+    @media print {
+      body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      thead { display:table-header-group; }
+      tr { page-break-inside:avoid; }
+    }
   </style>
 </head>
 <body>
   <div class="header">
     <div>
       <h1>${meta.label}</h1>
-      <p>${rows.length} record${this.filterText ? ' (filtrati)' : ''}</p>
+      <p>${rows.length} record${this.filter ? ' · filtrati per: "'+this.filter+'"' : ''}</p>
     </div>
     <p>Stampato il ${oggi}</p>
   </div>
   <table>
+    <colgroup>${colgroup}</colgroup>
     <thead><tr>${thead}</tr></thead>
     <tbody>${tbody}</tbody>
   </table>
-  <div class="footer">Gestionale Dipendenti — ${oggi}</div>
-  <script>window.onload=()=>{window.print();window.onafterprint=()=>window.close();}<\/script>
+  <div class="footer">
+    <span>Gestionale Dipendenti</span>
+    <span>${rows.length} record — ${oggi}</span>
+  </div>
+  <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
 </body>
 </html>`;
 
     const w = window.open('', '_blank');
+    if(!w){ toast('Abilita i popup per stampare','error'); return; }
     w.document.write(html);
     w.document.close();
   },
