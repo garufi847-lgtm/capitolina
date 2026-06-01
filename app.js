@@ -477,8 +477,21 @@ const App = {
       pan_('🎓 Formazione per Tipo',topF.map(([t,n])=>`<div class="bar-item" data-table="formazione" data-col="Tipologia Corso" data-val="${esc(t)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Filtra formazione per tipo"><span class="bar-label" title="${esc(t)}">${esc(t)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/mF*100)}%;background:var(--accent2)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
       pan_('🏥 Giudizi Sorveglianza',Object.entries(gC).sort((a,b)=>b[1]-a[1]).map(([g,n],gi)=>`<div class="bar-item" data-table="sorveglianza" data-col="Stato idoneità" data-val="${esc(g)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Clicca per filtrare"><span class="bar-label">${pill(g)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/S.length*100)}%;background:var(--success)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
       pan_('📊 Riepilogo','<table style="width:100%;font-size:14px">'+
-        [['Dipendenti',D.length,''],['Contratti',C.length,''],['Formazione',F.length,''],['Sorveglianza',S.length,''],['⚠ Scadenze 90gg',sc,'color:var(--warn)']].map(([l,v,s],i,a)=>
-          `<tr><td style="color:var(--text3);padding:8px 0;${i<a.length-1?'border-bottom:1px solid var(--border)':''}">${l}</td><td style="text-align:right;font-weight:700;padding:8px 0;${s};${i<a.length-1?'border-bottom:1px solid var(--border)':''}">${v}</td></tr>`
+        [
+          ['👤 Dipendenti',           D.length, '',                     "App.show('dipendenti')"],
+          ['📄 Contratti',            C.length, '',                     "App.show('contratti')"],
+          ['🎓 Formazione',           F.length, '',                     "App.show('formazione')"],
+          ['🏥 Sorveglianza',         S.length, '',                     "App.show('sorveglianza')"],
+          ['⚠ Scad. Sorveglianza 90gg', sc,    'color:var(--warn)',    "App.dashDetail('scadenze')"],
+          ['🌍 Permessi Soggiorno',   pp,       '',                     "App.dashDetail('tutti_permessi')"],
+          ['⚠ Scad. Permessi 90gg',  ps,       'color:var(--danger)',  "App.dashDetail('permessi')"],
+        ].map(([l,v,s,fn],i,a)=>
+          `<tr onclick="${fn}" style="cursor:pointer" title="Clicca per dettagli">
+            <td style="color:var(--text2);padding:8px 4px;${i<a.length-1?'border-bottom:1px solid var(--border)':''}">${l}</td>
+            <td style="text-align:right;font-weight:700;padding:8px 4px;${s};${i<a.length-1?'border-bottom:1px solid var(--border)':''}">
+              ${v} <span style="font-size:10px;color:var(--text4);font-weight:400">›</span>
+            </td>
+          </tr>`
         ).join('')+'</table>')+
       '</div>';
   },
