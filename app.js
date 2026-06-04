@@ -129,6 +129,178 @@ const FIELDS = {
   'Note Analisi':                   {type:'textarea'},
 };
 
+
+// ─── ALLEGATI ─────────────────────────────────────────────────────────────────
+// Slot definitions per tabella: {label, slot, single}
+// single=true → sovrascrive (attestato idoneità)
+// single=false → multipli
+
+const ALLEGATI_SLOTS = {
+  dipendenti: [
+    { label: '📎 Allegati Documenti Permesso', slot: 'permesso', single: false },
+  ],
+  contratti: [
+    { label: '📋 UNILAV Assunzione',    slot: 'unilav_ass',   single: false },
+    { label: '📋 UNILAV Proroghe',      slot: 'unilav_pro',   single: false },
+    { label: '📋 UNILAV Trasformazioni',slot: 'unilav_tra',   single: false },
+    { label: '📋 UNILAV Cessazioni',    slot: 'unilav_ces',   single: false },
+  ],
+  formazione: [
+    { label: '📎 Allegati Formazione',            slot: 'formazione',    single: false },
+    { label: '📎 Allegato Aggiornamento Formazione', slot: 'agg_formazione', single: false },
+  ],
+  sorveglianza: [
+    { label: '📄 Attestato Idoneità', slot: 'idoneita_single', single: true },
+  ],
+};
+
+// Sezioni form in cui inserire i bottoni allegati
+const ALLEGATI_AFTER = {
+  dipendenti:   '🌍 Permesso di Soggiorno',
+  contratti:    '⚙ Altro',
+  formazione:   '🎓 Corso',
+  sorveglianza: '🏥 Visita Medica',
+};
+
+const Allegati = {
+  // URL base API NAS - stessa della store
+  base(){ return typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : ''; },
+
+  // Apri modale allegati per un record
+  async openModal(table, recordId, slotDef){
+    const { label, slot, single } = slotDef;
+    document.getElementById('modal-title').textContent = label;
+
+    const base = this.base();
+    let files = [];
+    if(base){
+      try{
+        const r = await fetch(`${base}/files/${recordId}/${slot}`);
+        files = await r.json();
+      }catch(e){ console.warn('NAS non raggiungibile'); }
+    } else {
+      // Modalità locale: leggi da localStorage
+      const key = `allegati_${recordId}_${slot}`;
+      files = JSON.parse(localStorage.getItem(key)||'[]');
+    }
+
+    const list = this._renderList(files, recordId, slot, base, single);
+
+    document.getElementById('modal-body').innerHTML = `
+      <div style="margin-bottom:16px">
+        ${single ? '<p style="font-size:13px;color:var(--text3);margin-bottom:12px">⚠ Caricando un nuovo file, quello precedente viene sostituito.</p>' : ''}
+        <label class="btn btn-primary" style="cursor:pointer;display:inline-flex;align-items:center;gap:8px">
+          ➕ ${single ? 'Carica PDF (sostituisce)' : 'Aggiungi PDF'}
+          <input type="file" accept=".pdf" style="display:none" id="file-input-${slot}" onchange="Allegati.upload('${table}','${recordId}','${slot}',${single},this)"/>
+        </label>
+      </div>
+      <div id="allegati-list-${slot}">${list}</div>`;
+
+    document.getElementById('modal-footer').innerHTML =
+      `<button class="btn btn-ghost" onclick="App.closeModal()">Chiudi</button>`;
+    App.openModal();
+  },
+
+  _renderList(files, recordId, slot, base, single){
+    if(!files.length) return '<p style="color:var(--text3);font-size:13px;padding:8px 0">Nessun allegato presente.</p>';
+    return files.map(f => `
+      <div class="allegato-item">
+        <span class="allegato-icon">📄</span>
+        <span class="allegato-name" title="${esc(f.originalName)}">${esc(f.originalName)}</span>
+        <span class="allegato-size">${this._size(f.size)}</span>
+        <div class="allegato-actions">
+          <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px"
+            onclick="Allegati.download('${f.filename}','${esc(f.originalName)}')">⬇ Scarica</button>
+          <button class="btn btn-danger" style="font-size:12px;padding:5px 10px"
+            onclick="Allegati.delete('${f.filename}','${recordId}','${slot}',${single},this)">✕</button>
+        </div>
+      </div>`).join('');
+  },
+
+  _size(bytes){
+    if(!bytes) return '';
+    if(bytes < 1024) return bytes+'B';
+    if(bytes < 1024*1024) return Math.round(bytes/1024)+'KB';
+    return (bytes/1024/1024).toFixed(1)+'MB';
+  },
+
+  async upload(table, recordId, slot, single, input){
+    const file = input.files[0];
+    if(!file) return;
+    if(file.type !== 'application/pdf'){ toast('Solo file PDF','error'); return; }
+
+    const base = this.base();
+    if(base){
+      // Carica sul NAS
+      const fd = new FormData();
+      fd.append('file', file);
+      try{
+        const r = await fetch(`${base}/files/${recordId}/${slot}`, { method:'POST', body:fd });
+        if(!r.ok) throw new Error('Upload fallito');
+        toast('Allegato caricato ✓');
+      }catch(e){ toast('Errore upload: '+e.message,'error'); return; }
+    } else {
+      // Modalità locale: salva come base64 in localStorage
+      const reader = new FileReader();
+      reader.onload = e => {
+        const key = `allegati_${recordId}_${slot}`;
+        let files = JSON.parse(localStorage.getItem(key)||'[]');
+        if(single) files = [];
+        files.unshift({ filename: Date.now()+'__'+file.name, originalName: file.name, size: file.size, data: e.target.result, date: new Date() });
+        localStorage.setItem(key, JSON.stringify(files));
+        toast('Allegato salvato localmente ✓');
+        this.openModal(table, recordId, {label:document.getElementById('modal-title').textContent, slot, single});
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+    // Ricarica lista
+    this.openModal(table, recordId, {label:document.getElementById('modal-title').textContent, slot, single});
+  },
+
+  async download(filename, origName){
+    const base = this.base();
+    if(base){
+      const url = `${base}/files/download/${encodeURIComponent(filename)}`;
+      const a = document.createElement('a');
+      a.href = url; a.download = origName; a.target = '_blank';
+      a.click();
+    } else {
+      // Modalità locale: cerca in localStorage
+      const allKeys = Object.keys(localStorage).filter(k=>k.startsWith('allegati_'));
+      for(const k of allKeys){
+        const files = JSON.parse(localStorage.getItem(k)||'[]');
+        const f = files.find(x=>x.filename===filename);
+        if(f&&f.data){
+          const a = document.createElement('a');
+          a.href = f.data; a.download = origName; a.click();
+          return;
+        }
+      }
+      toast('File non trovato','error');
+    }
+  },
+
+  async delete(filename, recordId, slot, single, btn){
+    if(!confirm('Eliminare questo allegato?')) return;
+    const base = this.base();
+    if(base){
+      try{
+        await fetch(`${base}/files/download/${encodeURIComponent(filename)}`, { method:'DELETE' });
+        toast('Allegato eliminato','error');
+      }catch(e){ toast('Errore eliminazione','error'); return; }
+    } else {
+      const key = `allegati_${recordId}_${slot}`;
+      let files = JSON.parse(localStorage.getItem(key)||'[]');
+      files = files.filter(f=>f.filename!==filename);
+      localStorage.setItem(key, JSON.stringify(files));
+      toast('Allegato eliminato','error');
+    }
+    this.openModal(btn.closest('.modal').querySelector('h3')?.textContent||'Allegati',
+      recordId, {label:'', slot, single});
+  },
+};
+
 // ─── SEZIONI FORM PER TABELLA ─────────────────────────────────────────────────
 const SECTIONS = {
   dipendenti: [
@@ -442,7 +614,7 @@ const App = {
     }
   },
 
-  search(val){ this.filter=val.toLowerCase(); this.page=1; this.renderTable(this.table); },
+  search(val){ this.filter=val.toLowerCase().trim(); this.page=1; this.renderTable(this.table); },
 
   // ── DASHBOARD ──────────────────────────────────────────────────────────────
   renderDash(){
@@ -500,7 +672,15 @@ const App = {
   renderTable(t){
     const all=Store.getRows(t), cols=dispCols(t), meta=TABLE_META[t], canEdit=Auth.canEdit();
     let rows=all;
-    if(this.filter){const q=this.filter;rows=all.filter(r=>Object.values(r).some(v=>String(v).toLowerCase().includes(q)));}
+    if(this.filter){
+      // Supporta più termini separati da spazio (logica AND)
+      // es. "rossi mario" trova righe che contengono ENTRAMBI "rossi" E "mario"
+      const terms=this.filter.split(/\s+/).filter(t=>t.length>0);
+      rows=all.filter(r=>{
+        const allValues=Object.values(r).map(v=>String(v||'').toLowerCase()).join(' ');
+        return terms.every(t=>allValues.includes(t));
+      });
+    }
     if(this.sortCol){const sc=this.sortCol,sd=this.sortDir;rows=[...rows].sort((a,b)=>{const va=String(a[sc]||'').toLowerCase(),vb=String(b[sc]||'').toLowerCase();return va<vb?-sd:va>vb?sd:0;});}
     this.filtered=rows;
     const tot=rows.length, tp=Math.max(1,Math.ceil(tot/this.pageSize));
@@ -574,6 +754,19 @@ const App = {
       html+='</div></div>';
     }
 
+    // Allegati nella vista dettaglio
+    const allegSlotsV = ALLEGATI_SLOTS[t] || [];
+    if(allegSlotsV.length){
+      const recordId = row._id || '';
+      html += '<div class="form-section"><div class="form-section-title">📎 Allegati</div><div style="padding:14px;display:flex;flex-wrap:wrap;gap:10px">';
+      for(const slotDef of allegSlotsV){
+        html += `<button type="button" class="btn btn-ghost" style="font-size:13px"
+          onclick="Allegati.openModal('${t}','${recordId}',{label:'${slotDef.label.replace(/'/g,"\'")}',slot:'${slotDef.slot}',single:${slotDef.single}})">
+          ${slotDef.label}</button>`;
+      }
+      html += '</div></div>';
+    }
+
     document.getElementById('modal-body').innerHTML=html||'<p style="color:var(--text3);padding:8px">Nessun dato disponibile.</p>';
     document.getElementById('modal-footer').innerHTML=
       (Auth.canEdit()?`<button class="btn btn-primary" onclick="App.closeModal();App.openEdit('${t}',${idx})">✎ Modifica</button>`:'') +
@@ -622,6 +815,20 @@ const App = {
     }
 
     _formState.cols=allCols;
+
+    // Aggiungi sezioni allegati
+    const allegSlots = ALLEGATI_SLOTS[t] || [];
+    if(allegSlots.length && idx !== null){
+      const row = Store.getRows(t)[idx];
+      const recordId = row?._id || ('new_'+Date.now());
+      html += '<div class="form-section"><div class="form-section-title">📎 Allegati</div><div style="padding:14px;display:flex;flex-wrap:wrap;gap:10px">';
+      for(const slotDef of allegSlots){
+        html += `<button type="button" class="btn btn-ghost" style="font-size:13px"
+          onclick="Allegati.openModal('${t}','${recordId}',{label:'${slotDef.label.replace(/'/g,"\'")}',slot:'${slotDef.slot}',single:${slotDef.single}})">
+          ${slotDef.label}</button>`;
+      }
+      html += '</div></div>';
+    }
 
     document.getElementById('modal-body').innerHTML=html;
     document.getElementById('modal-footer').innerHTML=`

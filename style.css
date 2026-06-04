@@ -613,3 +613,34 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
 .stat-card[onclick] { transition: transform .15s, box-shadow .15s; }
 .stat-card[onclick]:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.15); }
 .bar-item[onclick]:hover { background: var(--surface2); border-radius: 8px; }
+
+/* ── ALLEGATI ────────────────────────────────────────────── */
+.allegato-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  transition: background .15s;
+}
+.allegato-item:hover { background: #eef2ff; border-color: var(--accent); }
+.allegato-icon { font-size: 20px; flex-shrink: 0; }
+.allegato-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.allegato-size {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.allegato-actions { display: flex; gap: 6px; flex-shrink: 0; }
