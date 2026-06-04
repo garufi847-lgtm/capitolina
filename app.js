@@ -281,6 +281,29 @@ const Allegati = {
     }
   },
 
+  // Rinomina allegati da tempId a realId dopo il salvataggio
+  async renameTempFiles(tempId, realId){
+    const base = this.base();
+    if(base){
+      // Chiama API per rinominare i file sul NAS
+      try{
+        await fetch(`${base}/files/rename`, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ oldId: tempId, newId: realId })
+        });
+      }catch(e){ console.warn('Rename files failed:', e.message); }
+    } else {
+      // Modalità locale: rinomina le chiavi in localStorage
+      const keys = Object.keys(localStorage).filter(k => k.startsWith('allegati_'+tempId+'_'));
+      keys.forEach(k => {
+        const newKey = k.replace('allegati_'+tempId+'_', 'allegati_'+realId+'_');
+        localStorage.setItem(newKey, localStorage.getItem(k));
+        localStorage.removeItem(k);
+      });
+    }
+  },
+
   async delete(filename, recordId, slot, single, btn){
     if(!confirm('Eliminare questo allegato?')) return;
     const base = this.base();
@@ -779,7 +802,7 @@ const App = {
   openEdit(t,idx){ this._openForm(t,Store.getRows(t)[idx],idx); },
 
   _openForm(t,row,idx){
-    _formState={table:t, idx:idx, cols:[]};
+    _formState={table:t, idx:idx, cols:[], tempId:null, recordId:null};
     document.getElementById('modal-title').textContent=(idx!==null?'✎ Modifica':'＋ Nuovo')+' — '+TABLE_META[t].label;
 
     // Only use cols that actually exist in the store
@@ -816,11 +839,20 @@ const App = {
 
     _formState.cols=allCols;
 
-    // Aggiungi sezioni allegati
+    // Aggiungi sezioni allegati - disponibili sia in modifica che in aggiunta
     const allegSlots = ALLEGATI_SLOTS[t] || [];
-    if(allegSlots.length && idx !== null){
-      const row = Store.getRows(t)[idx];
-      const recordId = row?._id || ('new_'+Date.now());
+    if(allegSlots.length){
+      // Per nuovi record genera un ID temporaneo persistente nella sessione
+      let recordId;
+      if(idx !== null){
+        const row = Store.getRows(t)[idx];
+        recordId = row?._id || ('new_'+Date.now());
+      } else {
+        // Nuovo record: usa un ID temporaneo salvato in _formState
+        if(!_formState.tempId) _formState.tempId = 'tmp_'+Date.now().toString(36)+Math.random().toString(36).slice(2);
+        recordId = _formState.tempId;
+      }
+      _formState.recordId = recordId;
       html += '<div class="form-section"><div class="form-section-title">📎 Allegati</div><div style="padding:14px;display:flex;flex-wrap:wrap;gap:10px">';
       for(const slotDef of allegSlots){
         html += `<button type="button" class="btn btn-ghost" style="font-size:13px"
@@ -864,8 +896,18 @@ const App = {
       } catch(e){ row[c]=''; }
     }
     try{
-      if(idx!==null){ Store.updateRow(table,idx,row); toast('Record aggiornato ✓'); }
-      else           { Store.addRow(table,row);        toast('Record aggiunto ✓'); }
+      if(idx!==null){
+        Store.updateRow(table,idx,row);
+        toast('Record aggiornato ✓');
+      } else {
+        Store.addRow(table,row);
+        // Se c'era un tempId, rinomina gli allegati con il vero _id
+        const newRow = Store.getRows(table)[Store.getRows(table).length-1];
+        if(_formState.tempId && newRow?._id){
+          Allegati.renameTempFiles(_formState.tempId, newRow._id);
+        }
+        toast('Record aggiunto ✓');
+      }
       this.closeModal();
       const b=document.getElementById('badge-'+table);
       if(b) b.textContent=Store.getRows(table).length;
