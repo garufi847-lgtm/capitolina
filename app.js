@@ -728,6 +728,7 @@ const App = {
         <div class="table-toolbar">
           <span style="font-size:14px;color:var(--text2);font-weight:600">${meta.label}</span>
           <span class="record-count">${this.filter?tot+' filtrati / ':''}${all.length} totali</span>
+          <button class="btn btn-ghost" style="font-size:13px;border-color:var(--accent);color:var(--accent)" onclick="App.openAdvSearch('${t}')">🔍 Ricerca Avanzata</button>
           <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportXLSX('${t}')">↓ Excel</button>
           <button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>
           <button class="btn btn-ghost" style="font-size:13px" onclick="App.printTable('${t}')">🖨 Stampa</button>
@@ -899,13 +900,16 @@ const App = {
       if(idx!==null){
         Store.updateRow(table,idx,row);
         toast('Record aggiornato ✓');
+        // Aggiorna anche le altre tabelle collegate
+        this.syncRelatedTables(table, row, idx);
       } else {
         Store.addRow(table,row);
-        // Se c'era un tempId, rinomina gli allegati con il vero _id
         const newRow = Store.getRows(table)[Store.getRows(table).length-1];
         if(_formState.tempId && newRow?._id){
           Allegati.renameTempFiles(_formState.tempId, newRow._id);
         }
+        // Crea righe collegate nelle altre tabelle
+        this.createRelatedRows(table, newRow);
         toast('Record aggiunto ✓');
       }
       this.closeModal();
@@ -1308,6 +1312,69 @@ const App = {
     w.document.close();
   },
 
+    // ── SINCRONIZZAZIONE TABELLE COLLEGATE ───────────────────────────────────────
+
+  // Campi da copiare da dipendenti alle tabelle collegate
+  _dipFields(dip){
+    return {
+      'Id Dipendente (N° Socio)': dip['N° Socio']||'',
+      'Cognome':                  dip['Cognome']||'',
+      'Nome':                     dip['Nome']||'',
+      'Azienda':                  dip['Azienda']||'',
+      'Mansione':                 dip['Mansione']||'',
+      'Stato Dipendente':         dip['Stato Dipendente']||'',
+      'Stato dipendente':         dip['Stato Dipendente']||'',
+      'Appalto / sede di lavoro': dip['Appalto / sede di lavoro']||'',
+      'Data assunzione':          dip['Data assunzione']||'',
+      'Codice Fiscale':           dip['Codice Fiscale']||'',
+    };
+  },
+
+  // Quando si aggiunge un dipendente → crea riga vuota in contratti, formazione, sorveglianza
+  createRelatedRows(table, newRow){
+    if(table !== 'dipendenti') return;
+    const shared = this._dipFields(newRow);
+    const sid = newRow['N° Socio']||'';
+    if(!sid) return;
+
+    const targets = ['contratti','formazione','sorveglianza'];
+    for(const t of targets){
+      const cols = Store.getCols(t);
+      const row = {};
+      cols.forEach(c => { row[c] = shared[c] !== undefined ? shared[c] : ''; });
+      Store.addRow(t, row);
+      const b = document.getElementById('badge-'+t);
+      if(b) b.textContent = Store.getRows(t).length;
+    }
+    toast('Riga creata automaticamente in Contratti, Formazione e Sorveglianza ✓');
+  },
+
+  // Quando si modifica un dipendente → aggiorna i campi condivisi nelle righe collegate
+  syncRelatedTables(table, updatedRow, idx){
+    if(table !== 'dipendenti') return;
+    const sid = updatedRow['N° Socio']||'';
+    if(!sid) return;
+    const shared = this._dipFields(updatedRow);
+    const targets = ['contratti','formazione','sorveglianza'];
+    let updated = 0;
+    for(const t of targets){
+      const rows = Store.getRows(t);
+      rows.forEach((r, i) => {
+        if((r['Id Dipendente (N° Socio)']||'').trim() === sid.trim()){
+          const newR = {...r};
+          Object.entries(shared).forEach(([k,v]) => {
+            if(k in newR) newR[k] = v;
+          });
+          Store.updateRow(t, i, newR);
+          updated++;
+        }
+      });
+      const b = document.getElementById('badge-'+t);
+      if(b) b.textContent = Store.getRows(t).length;
+    }
+    if(updated > 0) toast(`Aggiornate ${updated} righe collegate ✓`);
+  },
+
     // ── EXPORT XLSX ─────────────────────────────────────────────────────────────
   exportXLSX(t){
     const rows=this.filtered.length?this.filtered:Store.getRows(t);
@@ -1526,3 +1593,442 @@ const _sess=Auth.current();
 if(_sess){ document.getElementById('login-screen').style.display='none'; App.initApp(_sess); }
 else      { document.getElementById('login-screen').style.display='flex'; }
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+// ─── RICERCA AVANZATA ─────────────────────────────────────────────────────────
+
+// Campi disponibili per tabella con tipo e opzioni
+const ADV_FIELDS = {
+  dipendenti: [
+    { label:'N° Socio',            field:'N° Socio',                          type:'text' },
+    { label:'Cognome',             field:'Cognome',                           type:'text' },
+    { label:'Nome',                field:'Nome',                              type:'text' },
+    { label:'Azienda',             field:'Azienda',                           type:'select', opts:'aziende' },
+    { label:'Stato Dipendente',    field:'Stato Dipendente',                  type:'select', opts:'statoDip' },
+    { label:'Mansione',            field:'Mansione',                          type:'select', opts:'mansioni' },
+    { label:'Sesso',               field:'Sesso',                             type:'select', opts:'sesso' },
+    { label:'Codice Fiscale',      field:'Codice Fiscale',                    type:'text' },
+    { label:'Cittadinanza',        field:'Cittadinanza',                      type:'text' },
+    { label:'Luogo di Nascita',    field:'Luogo di Nascita',                  type:'text' },
+    { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',          type:'text' },
+    { label:'Data assunzione',     field:'Data assunzione',                   type:'date' },
+    { label:'Tipo Permesso',       field:'Tipo permesso',                     type:'select', opts:'tipoPermesso' },
+    { label:'Scad. Permesso',      field:'Data scadenza Permesso Soggiorno',  type:'date' },
+    { label:'Data rilascio Permesso', field:'Data rilascio Permesso Soggiorno', type:'date' },
+    { label:'Stato Socio',         field:'Stato Socio',                       type:'select', opts:'statoSocio' },
+    { label:'Comune Residenza',    field:'Comune Residenza',                  type:'text' },
+    { label:'Provincia Residenza', field:'Provincia Residenza',               type:'text' },
+    { label:'Telefono',            field:'Telefono Cellulare',                type:'text' },
+    { label:'Email',               field:'Email',                             type:'text' },
+    { label:'Tipo Documento',      field:'Tipo Documento',                    type:'select', opts:'tipoDoc' },
+    { label:'Scadenza Documento',  field:'Scadenza Documento',                type:'date' },
+  ],
+  contratti: [
+    { label:'ID Socio',            field:'Id Dipendente (N° Socio)',           type:'text' },
+    { label:'Cognome',             field:'Cognome',                            type:'text' },
+    { label:'Nome',                field:'Nome',                               type:'text' },
+    { label:'Azienda',             field:'Azienda',                            type:'select', opts:'aziende' },
+    { label:'Stato Dipendente',    field:'Stato Dipendente',                   type:'select', opts:'statoDip' },
+    { label:'Mansione',            field:'Mansione',                           type:'select', opts:'mansioni' },
+    { label:'Tipologia contrattuale', field:'Tipologia contrattuale',          type:'select', opts:'tipoContratto' },
+    { label:'Tipo orario',         field:'Tipologia orario contrattuale',      type:'select', opts:'orario' },
+    { label:'Livello',             field:'Livello',                            type:'select', opts:'livello' },
+    { label:'Ore settimanali',     field:'Ore contrattuali settimanali',       type:'select', opts:'oreSettimanali' },
+    { label:'CCNL',                field:'CCNL',                               type:'text' },
+    { label:'Data inizio',         field:'Data inizio',                        type:'date' },
+    { label:'Data fine',           field:'Data fine',                          type:'date' },
+    { label:'Scadenza Contratto',  field:'Scadenza Contratto',                 type:'date' },
+    { label:'Data assunzione',     field:'Data assunzione',                    type:'date' },
+    { label:'Causa fine rapporto', field:'Causa fine rapporto',                type:'select', opts:'causaFine' },
+    { label:'Data fine rapporto',  field:'Data fine rapporto',                 type:'date' },
+    { label:'Requisiti Incentivi', field:'Requisiti Incentivi',                type:'select', opts:'incentivi' },
+    { label:'Assistenza Sanitaria',field:'Assistenza Sanitaria integrativa',   type:'select', opts:'assistenza' },
+    { label:'Data Proroga 1',      field:'Data Proroga 1',                     type:'date' },
+    { label:'Data Proroga 2',      field:'Data Proroga 2',                     type:'date' },
+    { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',           type:'text' },
+  ],
+  formazione: [
+    { label:'ID Socio',            field:'Id Dipendente (N° Socio)',           type:'text' },
+    { label:'Cognome',             field:'Cognome',                            type:'text' },
+    { label:'Nome',                field:'Nome',                               type:'text' },
+    { label:'Azienda',             field:'Azienda',                            type:'select', opts:'aziende' },
+    { label:'Stato Dipendente',    field:'Stato Dipendente',                   type:'select', opts:'statoDip' },
+    { label:'Mansione',            field:'Mansione',                           type:'select', opts:'mansioni' },
+    { label:'Tipologia Corso',     field:'Tipologia Corso',                    type:'select', opts:'tipologiaCorso' },
+    { label:'Stato Corso',         field:'Stato Corso',                        type:'select', opts:'statoCoro' },
+    { label:'Docente',             field:'Docente',                            type:'text' },
+    { label:'Ore',                 field:'Ore',                                type:'text' },
+    { label:'Data Corso',          field:'Data Corso',                         type:'date' },
+    { label:'Scadenza Corso',      field:'Scadenza Corso',                     type:'date' },
+    { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',           type:'text' },
+  ],
+  sorveglianza: [
+    { label:'ID Socio',            field:'Id Dipendente (N° Socio)',           type:'text' },
+    { label:'Cognome',             field:'Cognome',                            type:'text' },
+    { label:'Nome',                field:'Nome',                               type:'text' },
+    { label:'Azienda',             field:'Azienda',                            type:'select', opts:'aziende' },
+    { label:'Stato Dipendente',    field:'Stato Dipendente',                   type:'select', opts:'statoDip' },
+    { label:'Mansione',            field:'Mansione',                           type:'select', opts:'mansioni' },
+    { label:'Stato Idoneità',      field:'Stato idoneità',                     type:'select', opts:'idoneo' },
+    { label:'Analisi',             field:'Analisi',                            type:'select', opts:'analisi' },
+    { label:'Laboratorio',         field:'Laboratorio Analisi',                type:'select', opts:'labAnalisi' },
+    { label:'Medico',              field:'Medico',                             type:'text' },
+    { label:'Data visita medica',  field:'Data visita medica',                 type:'date' },
+    { label:'Scadenza Idoneità',   field:'Scadenza Idoneità',                  type:'date' },
+    { label:'Data Analisi',        field:'Data Analisi',                       type:'date' },
+    { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',           type:'text' },
+  ],
+  aziende: [
+    { label:'Denominazione',       field:'Denominazione Ditta',                type:'text' },
+    { label:'Partita IVA',         field:'Partita IVA',                        type:'text' },
+    { label:'Codice ATECO',        field:'Codice ATECO',                       type:'text' },
+    { label:'PEC',                 field:'PEC',                                type:'text' },
+    { label:'Email',               field:'Email',                              type:'text' },
+  ],
+};
+
+// Operatori per tipo di campo
+const ADV_OPS_TEXT = [
+  { value:'contains',      label:'contiene' },
+  { value:'not_contains',  label:'non contiene' },
+  { value:'is',            label:'uguale a' },
+  { value:'is_not',        label:'diverso da' },
+  { value:'starts_with',   label:'inizia con' },
+  { value:'ends_with',     label:'termina con' },
+  { value:'is_empty',      label:'è vuoto' },
+  { value:'is_not_empty',  label:'non è vuoto' },
+];
+const ADV_OPS_SELECT = [
+  { value:'is',            label:'è uguale a' },
+  { value:'is_not',        label:'non è uguale a' },
+  { value:'is_empty',      label:'è vuoto' },
+  { value:'is_not_empty',  label:'non è vuoto' },
+];
+const ADV_OPS_DATE = [
+  { value:'is',            label:'è uguale a' },
+  { value:'before',        label:'prima del' },
+  { value:'after',         label:'dopo il' },
+  { value:'between',       label:"nell'intervallo" },
+  { value:'today',         label:'oggi' },
+  { value:'yesterday',     label:'ieri' },
+  { value:'last_7_days',   label:'ultimi 7 giorni' },
+  { value:'last_30_days',  label:'ultimi 30 giorni' },
+  { value:'last_60_days',  label:'ultimi 60 giorni' },
+  { value:'last_90_days',  label:'ultimi 90 giorni' },
+  { value:'last_120_days', label:'ultimi 120 giorni' },
+  { value:'next_7_days',   label:'prossimi 7 giorni' },
+  { value:'next_30_days',  label:'prossimi 30 giorni' },
+  { value:'next_60_days',  label:'prossimi 60 giorni' },
+  { value:'next_90_days',  label:'prossimi 90 giorni' },
+  { value:'next_120_days', label:'prossimi 120 giorni' },
+  { value:'this_month',    label:'questo mese' },
+  { value:'last_month',    label:'mese scorso' },
+  { value:'this_year',     label:"quest'anno" },
+  { value:'is_empty',      label:'è vuoto' },
+  { value:'is_not_empty',  label:'non è vuoto' },
+];
+
+let _advRowCount = 0;
+let _advTable = '';
+let _advCriteria = [];
+
+App.advCriteria = [];
+
+App.openAdvSearch = function(t){
+  _advTable = t;
+  _advRowCount = 0;
+  App.advCriteria = [];
+
+  document.getElementById('modal-title').textContent = '🔍 Ricerca Avanzata — '+TABLE_META[t].label;
+  document.getElementById('modal-body').innerHTML = `
+    <div class="adv-info">
+      Aggiungi uno o più criteri. I risultati rispettano <strong>tutti</strong> i criteri (logica AND).
+    </div>
+    <div id="adv-rows"></div>
+    <button type="button" class="btn btn-ghost" style="margin-top:12px;font-size:13px;color:var(--accent);border-color:var(--accent)" onclick="App.addAdvRow()">
+      ＋ Aggiungi criterio di ricerca
+    </button>`;
+
+  document.getElementById('modal-footer').innerHTML = `
+    <button class="btn btn-ghost" onclick="App.resetAdvFilters()">↺ Reset</button>
+    <button class="btn btn-ghost" onclick="App.closeModal()">Annulla</button>
+    <button class="btn btn-primary" onclick="App.applyAdvSearch()">🔍 Cerca</button>`;
+
+  // Add first row automatically
+  App.addAdvRow();
+  App.openModal();
+};
+
+App.addAdvRow = function(){
+  const t = _advTable;
+  const fields = ADV_FIELDS[t] || [];
+  const rowId = _advRowCount++;
+
+  const fieldOpts = fields.map(f =>
+    `<option value="${esc(f.field)}">${esc(f.label)}</option>`
+  ).join('');
+
+  const row = document.createElement('div');
+  row.className = 'adv-row';
+  row.id = 'adv-row-'+rowId;
+  row.innerHTML = `
+    <div class="adv-row-inner">
+      <select class="adv-select adv-field-sel" onchange="App.onAdvFieldChange(${rowId})">
+        <option value="">— seleziona campo —</option>
+        ${fieldOpts}
+      </select>
+      <select class="adv-select adv-op-sel" id="adv-op-${rowId}">
+        <option value="contains">contiene</option>
+      </select>
+      <div class="adv-val-wrap" id="adv-val-wrap-${rowId}">
+        <input type="text" class="adv-input" id="adv-val-${rowId}" placeholder="valore..."/>
+      </div>
+      <button type="button" class="adv-del-btn" onclick="document.getElementById('adv-row-${rowId}').remove()" title="Rimuovi">✕</button>
+    </div>`;
+  document.getElementById('adv-rows').appendChild(row);
+};
+
+App.onAdvFieldChange = function(rowId){
+  const t = _advTable;
+  const fields = ADV_FIELDS[t] || [];
+  const row = document.getElementById('adv-row-'+rowId);
+  const fieldSel = row.querySelector('.adv-field-sel');
+  const fieldName = fieldSel.value;
+  const fieldDef = fields.find(f => f.field === fieldName);
+  if(!fieldDef) return;
+
+  // Update operators
+  const opSel = document.getElementById('adv-op-'+rowId);
+  let ops;
+  if(fieldDef.type === 'date')   ops = ADV_OPS_DATE;
+  else if(fieldDef.type === 'select') ops = ADV_OPS_SELECT;
+  else ops = ADV_OPS_TEXT;
+  opSel.innerHTML = ops.map(o=>`<option value="${o.value}">${o.label}</option>`).join('');
+  opSel.onchange = () => App.onAdvOpChange(rowId, fieldDef);
+
+  // Show initial value input
+  App.onAdvOpChange(rowId, fieldDef);
+};
+
+App.onAdvOpChange = function(rowId, fieldDef){
+  const opSel = document.getElementById('adv-op-'+rowId);
+  const op = opSel.value;
+  const wrap = document.getElementById('adv-val-wrap-'+rowId);
+
+  // No-value operators
+  if(op === 'is_empty' || op === 'is_not_empty' || op === 'today' || op === 'yesterday' ||
+     op === 'last_7_days' || op === 'last_30_days' || op === 'last_60_days' || op === 'last_90_days' ||
+     op === 'last_120_days' || op === 'next_7_days' || op === 'next_30_days' || op === 'next_60_days' ||
+     op === 'next_90_days' || op === 'next_120_days' || op === 'this_month' || op === 'last_month' || op === 'this_year'){
+    wrap.innerHTML = '<span style="color:var(--text3);font-size:12px;line-height:36px">nessun valore richiesto</span>';
+    return;
+  }
+
+  // Date range
+  if(op === 'between' && fieldDef.type === 'date'){
+    wrap.innerHTML = `
+      <input type="date" class="adv-input" id="adv-val-${rowId}" placeholder="da"/>
+      <span style="color:var(--text3);font-size:13px;padding:0 4px">—</span>
+      <input type="date" class="adv-input" id="adv-val2-${rowId}" placeholder="a"/>`;
+    return;
+  }
+
+  // Select field
+  if(fieldDef.type === 'select' && (op === 'is' || op === 'is_not')){
+    const opts = OPT[fieldDef.opts] || [];
+    wrap.innerHTML = `<select class="adv-input" id="adv-val-${rowId}">
+      <option value="">— seleziona —</option>
+      ${opts.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+    </select>`;
+    return;
+  }
+
+  // Date single
+  if(fieldDef.type === 'date'){
+    wrap.innerHTML = `<input type="date" class="adv-input" id="adv-val-${rowId}"/>`;
+    return;
+  }
+
+  // Text default
+  wrap.innerHTML = `<input type="text" class="adv-input" id="adv-val-${rowId}" placeholder="valore..."/>`;
+};
+
+App.applyAdvSearch = function(){
+  const t = _advTable;
+  const fields = ADV_FIELDS[t] || [];
+  const criteria = [];
+
+  document.querySelectorAll('.adv-row').forEach(row => {
+    const fieldSel = row.querySelector('.adv-field-sel');
+    const opSel = row.querySelector('.adv-op-sel');
+    if(!fieldSel || !fieldSel.value) return;
+    const fieldName = fieldSel.value;
+    const op = opSel ? opSel.value : 'contains';
+    const fieldDef = fields.find(f => f.field === fieldName);
+    if(!fieldDef) return;
+
+    const rowId = row.id.replace('adv-row-','');
+    const val1El = document.getElementById('adv-val-'+rowId);
+    const val2El = document.getElementById('adv-val2-'+rowId);
+    const val1 = val1El ? val1El.value.trim() : '';
+    const val2 = val2El ? val2El.value.trim() : '';
+
+    criteria.push({ field: fieldName, fieldDef, op, val1, val2 });
+  });
+
+  App.advCriteria = criteria;
+  App.filter = '';
+  document.getElementById('search-input').value = '';
+  App.page = 1;
+  App.closeModal();
+  App.renderTable(t);
+  if(criteria.length) toast(`${criteria.length} filtro/i attivo/i — ${App.filtered.length} risultati`);
+};
+
+App.resetAdvFilters = function(){
+  App.advCriteria = [];
+  App.filter = '';
+  document.getElementById('search-input').value = '';
+  document.getElementById('adv-rows').innerHTML = '';
+  _advRowCount = 0;
+  App.addAdvRow();
+};
+
+// ── Date helpers ──────────────────────────────────────────────────────────────
+function advParseDate(s){
+  if(!s) return null;
+  const p = s.split(/[\/\-]/);
+  if(p.length !== 3) return null;
+  const d = p[0].length===4
+    ? new Date(p[0]+'-'+p[1]+'-'+p[2])
+    : new Date(p[2]+'-'+p[1]+'-'+p[0]);
+  return isNaN(d) ? null : d;
+}
+function advDateISO(s){
+  const d = advParseDate(s);
+  if(!d) return '';
+  return d.toISOString().slice(0,10);
+}
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function daysAgoISO(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
+function daysAheadISO(n){ const d=new Date(); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+
+function advMatchesCriteria(row, criteria){
+  return criteria.every(c => {
+    const rawVal = String(row[c.field]||'').trim();
+    const { op, val1, val2 } = c;
+
+    // No-value ops
+    if(op==='is_empty')     return !rawVal;
+    if(op==='is_not_empty') return !!rawVal;
+
+    // Date-relative ops
+    const today = todayISO();
+    const yesterday = daysAgoISO(1);
+    const rowISO = advDateISO(rawVal);
+    if(op==='today')         return rowISO === today;
+    if(op==='yesterday')     return rowISO === yesterday;
+    if(op==='last_7_days')   return rowISO >= daysAgoISO(7)   && rowISO <= today;
+    if(op==='last_30_days')  return rowISO >= daysAgoISO(30)  && rowISO <= today;
+    if(op==='last_60_days')  return rowISO >= daysAgoISO(60)  && rowISO <= today;
+    if(op==='last_90_days')  return rowISO >= daysAgoISO(90)  && rowISO <= today;
+    if(op==='last_120_days') return rowISO >= daysAgoISO(120) && rowISO <= today;
+    if(op==='next_7_days')   return rowISO >= today && rowISO <= daysAheadISO(7);
+    if(op==='next_30_days')  return rowISO >= today && rowISO <= daysAheadISO(30);
+    if(op==='next_60_days')  return rowISO >= today && rowISO <= daysAheadISO(60);
+    if(op==='next_90_days')  return rowISO >= today && rowISO <= daysAheadISO(90);
+    if(op==='next_120_days') return rowISO >= today && rowISO <= daysAheadISO(120);
+    if(op==='this_month'){
+      const m=today.slice(0,7); return rowISO.startsWith(m);
+    }
+    if(op==='last_month'){
+      const d=new Date(); d.setMonth(d.getMonth()-1);
+      const m=d.toISOString().slice(0,7); return rowISO.startsWith(m);
+    }
+    if(op==='this_year'){
+      return rowISO.startsWith(today.slice(0,4));
+    }
+
+    // Date with value
+    if(op==='before')   return rowISO && rowISO < val1;
+    if(op==='after')    return rowISO && rowISO > val1;
+    if(op==='between')  return rowISO && rowISO >= val1 && rowISO <= val2;
+
+    // Text/select ops
+    const rv = rawVal.toLowerCase();
+    const v1 = val1.toLowerCase();
+    if(op==='is')           return rv === v1;
+    if(op==='is_not')       return rv !== v1;
+    if(op==='contains')     return rv.includes(v1);
+    if(op==='not_contains') return !rv.includes(v1);
+    if(op==='starts_with')  return rv.startsWith(v1);
+    if(op==='ends_with')    return rv.endsWith(v1);
+    return true;
+  });
+}
+
+// Override renderTable to support advCriteria
+App.renderTable = function(t){
+  const all=Store.getRows(t), cols=dispCols(t), meta=TABLE_META[t], canEdit=Auth.canEdit();
+
+  let rows=all;
+  if(this.filter){
+    const terms=this.filter.split(/\s+/).filter(x=>x.length>0);
+    rows=all.filter(r=>{
+      const allValues=Object.values(r).map(v=>String(v||'').toLowerCase()).join(' ');
+      return terms.every(x=>allValues.includes(x));
+    });
+  }
+  if(this.advCriteria && this.advCriteria.length){
+    rows=rows.filter(r=>advMatchesCriteria(r, this.advCriteria));
+  }
+  if(this.sortCol){
+    const sc=this.sortCol, sd=this.sortDir;
+    rows=[...rows].sort((a,b)=>{
+      const va=String(a[sc]||'').toLowerCase(), vb=String(b[sc]||'').toLowerCase();
+      return va<vb?-sd:va>vb?sd:0;
+    });
+  }
+  this.filtered=rows;
+  const tot=rows.length, tp=Math.max(1,Math.ceil(tot/this.pageSize));
+  if(this.page>tp)this.page=tp;
+  const s0=(this.page-1)*this.pageSize, page=rows.slice(s0,s0+this.pageSize);
+
+  const advCount=this.advCriteria?this.advCriteria.length:0;
+  const advBadge=advCount?`<span style="background:var(--accent);color:#fff;border-radius:12px;padding:1px 8px;font-size:11px;margin-left:4px">${advCount} filtri</span>`:'';
+  const resetBtn=advCount?`<button class="btn btn-ghost" style="font-size:12px;color:var(--danger)" onclick="App.advCriteria=[];App.renderTable('${t}')">✕ Rimuovi filtri</button>`:'';
+
+  const ths=cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+'<th style="width:100px">Azioni</th>';
+  const trs=page.map(row=>{
+    const oi=all.indexOf(row);
+    const tds=cols.map(c=>{const v=row[c]??'';return meta.status===c?'<td>'+pill(v)+'</td>':`<td title="${esc(v)}">${esc(v)}</td>`;}).join('');
+    const actView=`<button class="icon-btn view" title="Visualizza" onclick="App.openView('${t}',${oi})">👁</button>`;
+    const actEdit=canEdit?`<button class="icon-btn" title="Modifica" onclick="App.openEdit('${t}',${oi})">✎</button><button class="icon-btn danger" title="Elimina" onclick="App.confirmDelete('${t}',${oi})">✕</button>`:'';
+    return`<tr>${tds}<td><div class="td-actions">${actView}${actEdit}</div></td></tr>`;
+  }).join('')||'<tr><td colspan="99" style="text-align:center;color:var(--text3);padding:36px">Nessun risultato</td></tr>';
+
+  let pgs='';const mB=7,sP=Math.max(1,Math.min(this.page-3,tp-mB+1)),eP=Math.min(tp,sP+mB-1);
+  for(let i=sP;i<=eP;i++)pgs+=`<button class="page-btn ${i===this.page?'active':''}" onclick="App.goPage(${i})">${i}</button>`;
+
+  document.getElementById('content').innerHTML=`
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <span style="font-size:14px;color:var(--text2);font-weight:600">${meta.label}${advBadge}</span>
+        ${resetBtn}
+        <span class="record-count">${this.filter||advCount?tot+' filtrati / ':''}${all.length} totali</span>
+        <button class="btn btn-ghost" style="font-size:13px;border-color:var(--accent);color:var(--accent)" onclick="App.openAdvSearch('${t}')">🔍 Ricerca Avanzata</button>
+        <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportXLSX('${t}')">↓ Excel</button>
+        <button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>
+        <button class="btn btn-ghost" style="font-size:13px" onclick="App.printTable('${t}')">🖨 Stampa</button>
+        <button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.clearTable('${t}')">🗑 Svuota</button>
+      </div>
+      <div class="table-scroll"><table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>
+      <div class="pagination">
+        <span class="page-info">${s0+1}–${Math.min(s0+this.pageSize,tot)} di ${tot}</span>
+        <button class="page-btn" onclick="App.goPage(1)" ${this.page===1?'disabled':''}>«</button>
+        <button class="page-btn" onclick="App.goPage(${this.page-1})" ${this.page===1?'disabled':''}>‹</button>
+        ${pgs}
+        <button class="page-btn" onclick="App.goPage(${this.page+1})" ${this.page===tp?'disabled':''}>›</button>
+        <button class="page-btn" onclick="App.goPage(${tp})" ${this.page===tp?'disabled':''}>»</button>
+      </div>
+    </div>`;
+};
