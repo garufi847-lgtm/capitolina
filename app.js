@@ -621,16 +621,15 @@ const App = {
     document.getElementById('search-input').value='';
     if(v==='dashboard'){
       sw.style.display='none';
-      ba.style.display='';
-      ba.textContent='📂 Importa Gestionale';
-      ba.className='btn btn-primary';
-      ba.onclick=()=>this.importXLSX('dipendenti');
+      ba.style.display='none'; // nascondo il singolo btn, uso due btn nel topbar
       this.renderDash();
     } else if(v==='utenti'){
+      const db=document.getElementById('dash-btns'); if(db)db.remove();
       sw.style.display='none'; ba.style.display=Auth.isAdmin()?'':'none';
       ba.textContent='+ Aggiungi'; ba.className='btn btn-primary';
       ba.onclick=()=>this.openAddUser(); this.renderUsers();
     } else {
+      const db=document.getElementById('dash-btns'); if(db)db.remove();
       this.table=v; sw.style.display=''; ba.style.display=Auth.canEdit()?'':'none';
       ba.textContent='+ Aggiungi'; ba.className='btn btn-primary';
       ba.onclick=()=>this.openAdd(); this.renderTable(v);
@@ -656,6 +655,18 @@ const App = {
     const sc_=(cl,l,v,s,onclick)=>`<div class="stat-card ${cl}"${onclick?' onclick="'+onclick+'" style="cursor:pointer"':''} title="${onclick?'Clicca per dettagli':''}"><div class="stat-label">${l}</div><div class="stat-value">${v}</div><div class="stat-sub">${s}</div></div>`;
     const bar_=(l,n,m,c,cb)=>`<div class="bar-item"${cb?' onclick="'+cb+'" style="cursor:pointer"':''} title="${cb?'Clicca per filtrare':''}"><span class="bar-label" title="${esc(l)}">${esc(l)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/m*100)}%;background:${c}"></div></div><span class="bar-count">${n}</span></div>`;
     const pan_=(t,b)=>`<div class="panel"><div class="panel-header">${t}</div><div class="panel-body">${b}</div></div>`;
+
+    // Aggiungi bottoni Import/Export nel topbar per la dashboard
+    const topbarEl = document.getElementById('topbar');
+    if(!document.getElementById('dash-btns')){
+      const btnWrap = document.createElement('div');
+      btnWrap.id = 'dash-btns';
+      btnWrap.style.cssText = 'display:flex;gap:8px;margin-left:auto';
+      btnWrap.innerHTML =
+        '<button class="btn btn-ghost" style="font-size:13px" onclick="App.exportGestionale()">↓ Esporta Gestionale</button>' +
+        '<button class="btn btn-primary" style="font-size:13px" onclick="App.importXLSX(\"dipendenti\")">📂 Importa Gestionale</button>';
+      topbarEl.appendChild(btnWrap);
+    }
 
     document.getElementById('content').innerHTML=
       '<div class="stats-grid">'+
@@ -1392,6 +1403,35 @@ const App = {
     XLSX.utils.book_append_sheet(wb,ws,meta.label.slice(0,31));
     XLSX.writeFile(wb,meta.label.replace(/[^a-zA-Z0-9]/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
     toast('Export Excel completato ✓');
+  },
+
+  // ── ESPORTA GESTIONALE COMPLETO ─────────────────────────────────────────────
+  exportGestionale(){
+    const tables = [
+      { key:'dipendenti',   label:'Anagrafica Dipendente' },
+      { key:'contratti',    label:'Contratti di Lavoro' },
+      { key:'formazione',   label:'Formazione' },
+      { key:'sorveglianza', label:'Sorveglianza Sanitaria' },
+      { key:'aziende',      label:'Anagrafica Azienda' },
+    ];
+
+    const wb = XLSX.utils.book_new();
+
+    for(const t of tables){
+      const rows = Store.getRows(t.key);
+      const cols = Store.getCols(t.key).filter(c => c && c !== '_id');
+      const data = [cols];
+      rows.forEach(r => data.push(cols.map(c => r[c]||'')));
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      // Larghezze colonne
+      ws['!cols'] = cols.map(c => ({ wch: Math.max(c.length, 12) }));
+      ws['!freeze'] = { xSplit:0, ySplit:1 };
+      XLSX.utils.book_append_sheet(wb, ws, t.label.slice(0,31));
+    }
+
+    const today = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, `Gestionale_Dipendenti_backup_${today}.xlsx`);
+    toast('Backup Excel scaricato ✓');
   },
 
   // ── IMPORT XLSX ──────────────────────────────────────────────────────────────
