@@ -494,7 +494,7 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
 /* ── LOGIN ───────────────────────────────────────────────── */
 #login-screen {
   position: fixed; inset: 0;
-  background: linear-gradient(135deg, #f0f4ff 0%, #e8edf8 100%);
+  background: linear-gradient(135deg, #1e2540 0%, #2d3561 100%);
   display: flex; align-items: center; justify-content: center;
   z-index: 50;
 }
@@ -509,8 +509,8 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
   margin-bottom: 16px;
   box-shadow: 0 8px 24px rgba(37,99,235,.4);
 }
-.login-brand h1 { font-size: 22px; font-weight: 800; color: #1F4E79; margin-bottom: 5px; }
-.login-brand p  { font-size: 14px; color: #64748b; }
+.login-brand h1 { font-size: 22px; font-weight: 800; color: #fff; margin-bottom: 5px; }
+.login-brand p  { font-size: 14px; color: #93a8e0; }
 .login-form {
   background: #fff;
   border-radius: 16px;
