@@ -1802,6 +1802,7 @@ App.addAdvRow = function(){
   const t = _advTable;
   const fields = ADV_FIELDS[t] || [];
   const rowId = _advRowCount++;
+  const isFirst = rowId === 0;
 
   const fieldOpts = fields.map(f =>
     `<option value="${esc(f.field)}">${esc(f.label)}</option>`
@@ -1811,6 +1812,10 @@ App.addAdvRow = function(){
   row.className = 'adv-row';
   row.id = 'adv-row-'+rowId;
   row.innerHTML = `
+    ${!isFirst ? `<div class="adv-connector">
+      <button type="button" class="adv-conn-btn active" id="adv-conn-${rowId}" data-val="AND" onclick="App.toggleConnector(${rowId})">AND</button>
+      <span class="adv-conn-hint">clicca per cambiare in OR</span>
+    </div>` : ''}
     <div class="adv-row-inner">
       <select class="adv-select adv-field-sel" onchange="App.onAdvFieldChange(${rowId})">
         <option value="">— seleziona campo —</option>
@@ -1825,6 +1830,26 @@ App.addAdvRow = function(){
       <button type="button" class="adv-del-btn" onclick="document.getElementById('adv-row-${rowId}').remove()" title="Rimuovi">✕</button>
     </div>`;
   document.getElementById('adv-rows').appendChild(row);
+};
+
+App.toggleConnector = function(rowId){
+  const btn = document.getElementById('adv-conn-'+rowId);
+  if(!btn) return;
+  if(btn.dataset.val === 'AND'){
+    btn.dataset.val = 'OR';
+    btn.textContent = 'OR';
+    btn.classList.remove('active');
+    btn.classList.add('or');
+    btn.title = 'Clicca per cambiare in AND';
+    btn.nextElementSibling.textContent = 'clicca per cambiare in AND';
+  } else {
+    btn.dataset.val = 'AND';
+    btn.textContent = 'AND';
+    btn.classList.remove('or');
+    btn.classList.add('active');
+    btn.title = 'Clicca per cambiare in OR';
+    btn.nextElementSibling.textContent = 'clicca per cambiare in OR';
+  }
 };
 
 App.onAdvFieldChange = function(rowId){
@@ -1912,7 +1937,11 @@ App.applyAdvSearch = function(){
     const val1 = val1El ? val1El.value.trim() : '';
     const val2 = val2El ? val2El.value.trim() : '';
 
-    criteria.push({ field: fieldName, fieldDef, op, val1, val2 });
+    // Read connector (AND/OR) - first row has no connector, defaults to AND
+    const connBtn = document.getElementById('adv-conn-'+rowId);
+    const connector = connBtn ? connBtn.dataset.val : 'AND';
+
+    criteria.push({ field: fieldName, fieldDef, op, val1, val2, connector });
   });
 
   App.advCriteria = criteria;
@@ -1953,7 +1982,24 @@ function daysAgoISO(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.t
 function daysAheadISO(n){ const d=new Date(); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 
 function advMatchesCriteria(row, criteria){
-  return criteria.every(c => {
+  if(!criteria.length) return true;
+  // Evaluate using AND/OR connectors
+  // Group criteria into AND/OR chains
+  // Logic: evaluate left to right, connector applies between previous result and current
+  let result = evalCriterion(row, criteria[0]);
+  for(let i = 1; i < criteria.length; i++){
+    const c = criteria[i];
+    const cur = evalCriterion(row, c);
+    if(c.connector === 'OR'){
+      result = result || cur;
+    } else {
+      result = result && cur;
+    }
+  }
+  return result;
+}
+
+function evalCriterion(row, c){
     const rawVal = String(row[c.field]||'').trim();
     const { op, val1, val2 } = c;
 
@@ -2002,8 +2048,7 @@ function advMatchesCriteria(row, criteria){
     if(op==='not_contains') return !rv.includes(v1);
     if(op==='starts_with')  return rv.startsWith(v1);
     if(op==='ends_with')    return rv.endsWith(v1);
-    return true;
-  });
+  return true;
 }
 
 // Override renderTable to support advCriteria
