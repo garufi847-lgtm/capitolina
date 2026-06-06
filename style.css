@@ -892,3 +892,45 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
   background: #dbeafe;
   cursor: pointer;
 }
+
+/* ── LOGO LOGIN ──────────────────────────────────────────── */
+.login-brand img {
+  display: block;
+  margin: 0 auto 12px;
+}
+
+/* ── FENIX FOOTER ────────────────────────────────────────── */
+#fenix-footer {
+  position: fixed;
+  bottom: 12px;
+  right: 14px;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(255,255,255,.92);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 5px 12px 5px 10px;
+  text-decoration: none;
+  box-shadow: 0 2px 10px rgba(0,0,0,.10);
+  transition: box-shadow .2s, transform .2s;
+  backdrop-filter: blur(4px);
+}
+#fenix-footer:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  transform: translateY(-1px);
+}
+#fenix-footer span {
+  font-family: var(--font);
+  font-size: 11px;
+  color: var(--text3);
+  font-weight: 500;
+  white-space: nowrap;
+}
+#fenix-footer img {
+  height: 22px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
