@@ -739,7 +739,8 @@ const App = {
         <div class="table-toolbar">
           <span style="font-size:14px;color:var(--text2);font-weight:600">${meta.label}</span>
           <span class="record-count">${this.filter?tot+' filtrati / ':''}${all.length} totali</span>
-          <button class="btn btn-ghost" style="font-size:13px;border-color:var(--accent);color:var(--accent)" onclick="App.openAdvSearch('${t}')">🔍 Ricerca Avanzata</button>
+          <button class="btn btn-ghost" style="font-size:13px;background:var(--accent);color:#fff;border-color:var(--accent)" onclick="App.openQuickSearches('${t}')">⚡ Ricerche Rapide</button>
+        <button class="btn btn-ghost" style="font-size:13px;border-color:var(--accent);color:var(--accent)" onclick="App.openAdvSearch('${t}')">🔍 Ricerca Avanzata</button>
           <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportXLSX('${t}')">↓ Excel</button>
           <button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>
           <button class="btn btn-ghost" style="font-size:13px" onclick="App.printTable('${t}')">🖨 Stampa</button>
@@ -2102,6 +2103,7 @@ App.renderTable = function(t){
         <span style="font-size:14px;color:var(--text2);font-weight:600">${meta.label}${advBadge}</span>
         ${resetBtn}
         <span class="record-count">${this.filter||advCount?tot+' filtrati / ':''}${all.length} totali</span>
+        <button class="btn btn-ghost" style="font-size:13px;background:var(--accent);color:#fff;border-color:var(--accent)" onclick="App.openQuickSearches('${t}')">⚡ Ricerche Rapide</button>
         <button class="btn btn-ghost" style="font-size:13px;border-color:var(--accent);color:var(--accent)" onclick="App.openAdvSearch('${t}')">🔍 Ricerca Avanzata</button>
         <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportXLSX('${t}')">↓ Excel</button>
         <button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>
@@ -2118,4 +2120,226 @@ App.renderTable = function(t){
         <button class="page-btn" onclick="App.goPage(${tp})" ${this.page===tp?'disabled':''}>»</button>
       </div>
     </div>`;
+};
+
+// ─── RICERCHE RAPIDE ──────────────────────────────────────────────────────────
+
+// Definizione delle ricerche rapide per tabella
+const QUICK_SEARCHES = {
+  dipendenti: [
+    {
+      id: 'aliante_soci',
+      label: '👥 ALIANTE — Elenco Soci per Assemblee',
+      desc: 'Tutti i soci ATTIVI di ALIANTE Soc. Coop.',
+      criteria: [
+        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'ALIANTE Soc. Coop.', val2:'', connector:'AND' },
+        { field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'capitolina_soci',
+      label: '👥 CAPITOLINA LOGISTICA — Elenco Soci per Assemblee',
+      desc: 'Tutti i soci ATTIVI di CAPITOLINA LOGISTICA Scarl',
+      criteria: [
+        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'CAPITOLINA LOGISTICA Scarl', val2:'', connector:'AND' },
+        { field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'fipam_soci',
+      label: '👥 FIPAM — Elenco Soci per Assemblee',
+      desc: 'Tutti i soci ATTIVI di FIPAM Scarl',
+      criteria: [
+        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'FIPAM  Scarl', val2:'', connector:'AND' },
+        { field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'seriam_soci',
+      label: '👥 SERIAM — Elenco Soci per Assemblee',
+      desc: 'Tutti i soci ATTIVI di SERIAM Scarl',
+      criteria: [
+        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'SERIAM Scarl', val2:'', connector:'AND' },
+        { field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'aliante_permessi',
+      label: '🌍 ALIANTE — Scadenzario Permessi di Soggiorno',
+      desc: 'Dipendenti ALIANTE con permesso di soggiorno (anno corrente e precedente)',
+      criteria: [
+        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'ALIANTE Soc. Coop.', val2:'', connector:'AND' },
+        { field:'Tipo permesso', fieldDef:{type:'select'}, op:'is_not_empty', val1:'', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'tutti_permessi_scadenza',
+      label: '🌍 Scadenzario Permessi — Tutti',
+      desc: 'Tutti i dipendenti con permesso di soggiorno in scadenza',
+      criteria: [
+        { field:'Tipo permesso', fieldDef:{type:'select'}, op:'is_not_empty', val1:'', val2:'', connector:'AND' },
+        { field:'Data scadenza Permesso Soggiorno', fieldDef:{type:'date'}, op:'next_90_days', val1:'', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'dipendenti_attivi',
+      label: '✅ Tutti i Dipendenti Attivi',
+      desc: 'Dipendenti con stato ATTIVO in tutte le aziende',
+      criteria: [
+        { field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'dipendenti_non_forza',
+      label: '❌ Dipendenti Non in Forza',
+      desc: 'Dipendenti con stato NON IN FORZA',
+      criteria: [
+        { field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'NON IN FORZA', val2:'', connector:'AND' },
+      ]
+    },
+  ],
+  formazione: [
+    {
+      id: 'form_scadenza_mese',
+      label: '📅 Scadenzario Formazione — Mese Corrente e Prossimo',
+      desc: 'Corsi con scadenza nel mese corrente o nel prossimo',
+      criteria: [
+        { field:'Scadenza Corso', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND' },
+        { field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'form_corso_base_scadenza',
+      label: '📅 Scadenzario Corso Base — Mese Corrente e Prossimo',
+      desc: 'Corso Base con scadenza nel mese corrente o nel prossimo',
+      criteria: [
+        { field:'Tipologia Corso', fieldDef:{type:'select'}, op:'is', val1:'Corso Base', val2:'', connector:'AND' },
+        { field:'Scadenza Corso', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'form_da_completare',
+      label: '⏳ Formazione Da Completare',
+      desc: 'Tutti i corsi con stato "Da completare"',
+      criteria: [
+        { field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Da completare', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'form_scaduti',
+      label: '🔴 Formazione Scaduta',
+      desc: 'Corsi con scadenza già passata',
+      criteria: [
+        { field:'Scadenza Corso', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND' },
+        { field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND' },
+      ]
+    },
+  ],
+  sorveglianza: [
+    {
+      id: 'sorv_scadenza_mese',
+      label: '📅 Scadenze Idoneità — Mese Corrente e Prossimo',
+      desc: 'Visite con scadenza idoneità nel mese corrente o nel prossimo',
+      criteria: [
+        { field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'sorv_non_idonei',
+      label: '🔴 Non Idonei / In Attesa',
+      desc: 'Dipendenti non idonei o in attesa di visita',
+      criteria: [
+        { field:'Stato idoneità', fieldDef:{type:'select'}, op:'is_not', val1:'Idoneo', val2:'', connector:'AND' },
+        { field:'Stato idoneità', fieldDef:{type:'select'}, op:'is_not_empty', val1:'', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'sorv_scaduti',
+      label: '🔴 Idoneità Scaduta',
+      desc: 'Dipendenti con scadenza idoneità già passata',
+      criteria: [
+        { field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'sorv_con_prescrizioni',
+      label: '🟡 Idonei con Prescrizioni',
+      desc: 'Dipendenti idonei con prescrizioni mediche',
+      criteria: [
+        { field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'prescrizioni', val2:'', connector:'AND' },
+      ]
+    },
+  ],
+  contratti: [
+    {
+      id: 'cont_scadenza_mese',
+      label: '📅 Contratti in Scadenza — Prossimi 30 Giorni',
+      desc: 'Contratti a tempo determinato in scadenza nel prossimo mese',
+      criteria: [
+        { field:'Scadenza Contratto', fieldDef:{type:'date'}, op:'next_30_days', val1:'', val2:'', connector:'AND' },
+        { field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Tempo determinato', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'cont_tempo_indeterminato',
+      label: '✅ Contratti Tempo Indeterminato',
+      desc: 'Tutti i contratti a tempo indeterminato attivi',
+      criteria: [
+        { field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Tempo indeterminato', val2:'', connector:'AND' },
+        { field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      ]
+    },
+    {
+      id: 'cont_intermittente',
+      label: '🔄 Contratti Intermittenti',
+      desc: 'Tutti i contratti di lavoro intermittente',
+      criteria: [
+        { field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Lavoro intermittente', val2:'', connector:'AND' },
+      ]
+    },
+  ],
+  aziende: [],
+};
+
+App.openQuickSearches = function(t){
+  const searches = QUICK_SEARCHES[t] || [];
+  const meta = TABLE_META[t];
+
+  if(!searches.length){
+    toast('Nessuna ricerca rapida disponibile per questa tabella', 'error');
+    return;
+  }
+
+  document.getElementById('modal-title').textContent = '⚡ Ricerche Rapide — '+meta.label;
+
+  let html = '<div class="quick-search-grid">';
+  searches.forEach(s => {
+    // Count matching records
+    const count = Store.getRows(t).filter(r => advMatchesCriteria(r, s.criteria)).length;
+    html += `
+      <div class="quick-card" onclick="App.applyQuickSearch('${t}','${s.id}')">
+        <div class="quick-card-label">${s.label}</div>
+        <div class="quick-card-desc">${esc(s.desc)}</div>
+        <div class="quick-card-count">${count} record</div>
+      </div>`;
+  });
+  html += '</div>';
+
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('modal-footer').innerHTML =
+    `<button class="btn btn-ghost" onclick="App.closeModal()">Chiudi</button>`;
+  App.openModal();
+};
+
+App.applyQuickSearch = function(t, id){
+  const searches = QUICK_SEARCHES[t] || [];
+  const s = searches.find(x => x.id === id);
+  if(!s) return;
+  App.advCriteria = s.criteria;
+  App.filter = '';
+  document.getElementById('search-input').value = '';
+  App.page = 1;
+  App.closeModal();
+  App.renderTable(t);
+  toast(`"${s.label}" — ${App.filtered.length} risultati`);
 };
