@@ -801,7 +801,7 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
   gap: 12px;
 }
 .quick-card {
-  background: var(--surface2);
+  background: var(--surface);
   border: 1.5px solid var(--border);
   border-radius: 10px;
   padding: 14px 16px;
@@ -809,6 +809,9 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
   transition: all .15s;
   position: relative;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .quick-card::before {
   content: '';
@@ -821,21 +824,24 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
 .quick-card:hover {
   background: #eff6ff;
   border-color: var(--accent);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(37,99,235,.12);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(37,99,235,.15);
+}
+.quick-card-icon {
+  font-size: 22px;
+  margin-bottom: 4px;
 }
 .quick-card-label {
   font-size: 13px;
   font-weight: 700;
   color: var(--text);
-  margin-bottom: 5px;
   line-height: 1.4;
 }
 .quick-card-desc {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text3);
   line-height: 1.4;
-  margin-bottom: 10px;
+  flex: 1;
 }
 .quick-card-count {
   font-size: 11px;
@@ -846,4 +852,43 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
   display: inline-block;
   padding: 2px 8px;
   border-radius: 12px;
+  margin-top: 6px;
+  align-self: flex-start;
+}
+
+/* ── RISULTATO RICERCA RAPIDA ────────────────────────────── */
+.quick-result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.quick-result-table thead th {
+  background: #1F4E79;
+  color: #fff;
+  padding: 9px 10px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.quick-result-table tbody td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text2);
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.quick-result-table tbody tr:nth-child(even) td {
+  background: #EBF3FB;
+}
+.quick-result-table tbody tr:hover td {
+  background: #dbeafe;
+  cursor: pointer;
 }

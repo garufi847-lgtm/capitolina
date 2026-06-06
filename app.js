@@ -721,7 +721,9 @@ const App = {
     if(this.page>tp)this.page=tp;
     const s0=(this.page-1)*this.pageSize, page=rows.slice(s0,s0+this.pageSize);
 
-    const ths=cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+'<th style="width:100px">Azioni</th>';
+    const ths=cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+
+    `<th style="width:100px;cursor:pointer" onclick="App.sortCol=null;App.sortDir=1;App.renderTable('${t}')" title="Torna all'ordine di inserimento">
+      ${!this.sortCol?'🕒 Inserimento':'↺'}</th>`;
 
     const trs=page.map(row=>{
       const oi=all.indexOf(row);
@@ -2075,6 +2077,17 @@ App.renderTable = function(t){
       const va=String(a[sc]||'').toLowerCase(), vb=String(b[sc]||'').toLowerCase();
       return va<vb?-sd:va>vb?sd:0;
     });
+  } else {
+    // Default: ordine di inserimento (più recente prima) tramite _id
+    rows=[...rows].sort((a,b)=>{
+      const ia=String(a._id||''), ib=String(b._id||'');
+      if(!ia && !ib) return 0;
+      if(!ia) return 1;
+      if(!ib) return -1;
+      // _id starts with timestamp in base36 — compare as strings (lexicographic = chronological)
+      const ta=ia.slice(0,8), tb=ib.slice(0,8);
+      return tb.localeCompare(ta); // newest first
+    });
   }
   this.filtered=rows;
   const tot=rows.length, tp=Math.max(1,Math.ceil(tot/this.pageSize));
@@ -2085,7 +2098,9 @@ App.renderTable = function(t){
   const advBadge=advCount?`<span style="background:var(--accent);color:#fff;border-radius:12px;padding:1px 8px;font-size:11px;margin-left:4px">${advCount} filtri</span>`:'';
   const resetBtn=advCount?`<button class="btn btn-ghost" style="font-size:12px;color:var(--danger)" onclick="App.advCriteria=[];App.renderTable('${t}')">✕ Rimuovi filtri</button>`:'';
 
-  const ths=cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+'<th style="width:100px">Azioni</th>';
+  const ths=cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+
+    `<th style="width:100px;cursor:pointer" onclick="App.sortCol=null;App.sortDir=1;App.renderTable('${t}')" title="Torna all'ordine di inserimento">
+      ${!this.sortCol?'🕒 Inserimento':'↺'}</th>`;
   const trs=page.map(row=>{
     const oi=all.indexOf(row);
     const tds=cols.map(c=>{const v=row[c]??'';return meta.status===c?'<td>'+pill(v)+'</td>':`<td title="${esc(v)}">${esc(v)}</td>`;}).join('');
@@ -2124,201 +2139,262 @@ App.renderTable = function(t){
 
 // ─── RICERCHE RAPIDE ──────────────────────────────────────────────────────────
 
-// Definizione delle ricerche rapide per tabella
 const QUICK_SEARCHES = {
   dipendenti: [
     {
-      id: 'aliante_soci',
-      label: '👥 ALIANTE — Elenco Soci per Assemblee',
-      desc: 'Tutti i soci ATTIVI di ALIANTE Soc. Coop.',
-      criteria: [
-        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'ALIANTE Soc. Coop.', val2:'', connector:'AND' },
-        { field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      id:'aliante_soci', icon:'👥',
+      label:'ALIANTE — Elenco Soci per Assemblee',
+      desc:'Soci ATTIVI di ALIANTE Soc. Coop.',
+      table:'dipendenti',
+      cols:['N° Socio','Cognome','Nome','Data Delibera Ammissione','Note'],
+      criteria:[
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'is', val1:'ALIANTE Soc. Coop.', val2:'', connector:'AND'},
+        {field:'Stato Socio',    fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',              val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'capitolina_soci',
-      label: '👥 CAPITOLINA LOGISTICA — Elenco Soci per Assemblee',
-      desc: 'Tutti i soci ATTIVI di CAPITOLINA LOGISTICA Scarl',
-      criteria: [
-        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'CAPITOLINA LOGISTICA Scarl', val2:'', connector:'AND' },
-        { field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      id:'capitolina_soci', icon:'👥',
+      label:'CAPITOLINA LOGISTICA — Elenco Soci per Assemblee',
+      desc:'Soci ATTIVI di CAPITOLINA LOGISTICA Scarl',
+      table:'dipendenti',
+      cols:['N° Socio','Cognome','Nome','Data Delibera Ammissione','Note'],
+      criteria:[
+        {field:'Azienda',     fieldDef:{type:'select'}, op:'is', val1:'CAPITOLINA LOGISTICA Scarl', val2:'', connector:'AND'},
+        {field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',                     val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'fipam_soci',
-      label: '👥 FIPAM — Elenco Soci per Assemblee',
-      desc: 'Tutti i soci ATTIVI di FIPAM Scarl',
-      criteria: [
-        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'FIPAM  Scarl', val2:'', connector:'AND' },
-        { field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      id:'fipam_soci', icon:'👥',
+      label:'FIPAM — Elenco Soci per Assemblee',
+      desc:'Soci ATTIVI di FIPAM Scarl',
+      table:'dipendenti',
+      cols:['N° Socio','Cognome','Nome','Data Delibera Ammissione','Note'],
+      criteria:[
+        {field:'Azienda',     fieldDef:{type:'select'}, op:'is', val1:'FIPAM  Scarl', val2:'', connector:'AND'},
+        {field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',       val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'seriam_soci',
-      label: '👥 SERIAM — Elenco Soci per Assemblee',
-      desc: 'Tutti i soci ATTIVI di SERIAM Scarl',
-      criteria: [
-        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'SERIAM Scarl', val2:'', connector:'AND' },
-        { field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      id:'seriam_soci', icon:'👥',
+      label:'SERIAM — Elenco Soci per Assemblee',
+      desc:'Soci ATTIVI di SERIAM Scarl',
+      table:'dipendenti',
+      cols:['N° Socio','Cognome','Nome','Data Delibera Ammissione','Note'],
+      criteria:[
+        {field:'Azienda',     fieldDef:{type:'select'}, op:'is', val1:'SERIAM Scarl', val2:'', connector:'AND'},
+        {field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',       val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'aliante_permessi',
-      label: '🌍 ALIANTE — Scadenzario Permessi di Soggiorno',
-      desc: 'Dipendenti ALIANTE con permesso di soggiorno (anno corrente e precedente)',
-      criteria: [
-        { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:'ALIANTE Soc. Coop.', val2:'', connector:'AND' },
-        { field:'Tipo permesso', fieldDef:{type:'select'}, op:'is_not_empty', val1:'', val2:'', connector:'AND' },
+      id:'aliante_permessi', icon:'🌍',
+      label:'ALIANTE — Scadenzario Permessi di Soggiorno',
+      desc:'Dipendenti ALIANTE con permesso di soggiorno',
+      table:'dipendenti',
+      cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
+      criteria:[
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'ALIANTE Soc. Coop.', val2:'', connector:'AND'},
+        {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                   val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'tutti_permessi_scadenza',
-      label: '🌍 Scadenzario Permessi — Tutti',
-      desc: 'Tutti i dipendenti con permesso di soggiorno in scadenza',
-      criteria: [
-        { field:'Tipo permesso', fieldDef:{type:'select'}, op:'is_not_empty', val1:'', val2:'', connector:'AND' },
-        { field:'Data scadenza Permesso Soggiorno', fieldDef:{type:'date'}, op:'next_90_days', val1:'', val2:'', connector:'AND' },
+      id:'tutti_permessi', icon:'🌍',
+      label:'Scadenzario Permessi — Tutti',
+      desc:'Tutti i dipendenti con permesso in scadenza (anno corrente e precedente)',
+      table:'dipendenti',
+      cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
+      criteria:[
+        {field:'Tipo permesso', fieldDef:{type:'select'}, op:'is_not_empty', val1:'', val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'dipendenti_attivi',
-      label: '✅ Tutti i Dipendenti Attivi',
-      desc: 'Dipendenti con stato ATTIVO in tutte le aziende',
-      criteria: [
-        { field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      id:'entrate_uscite', icon:'📊',
+      label:'Situazione Entrate / Uscite Dipendenti — Settimana Precedente',
+      desc:'Dipendenti assunti o cessati nella settimana precedente',
+      table:'dipendenti',
+      cols:['Azienda','Cognome','Nome','Data di Nascita','Luogo di Nascita','Codice Fiscale','Mansione','Stato Dipendente','Data assunzione','Data fine rapporto','Appalto / sede di lavoro'],
+      criteria:[], // dynamic - computed at runtime
+      dynamic: 'entrate_uscite',
+    },
+    {
+      id:'dipendenti_attivi', icon:'✅',
+      label:'Tutti i Dipendenti Attivi',
+      desc:'Dipendenti con stato ATTIVO in tutte le aziende',
+      table:'dipendenti',
+      cols:['N° Socio','Azienda','Cognome','Nome','Mansione','Stato Dipendente','Data assunzione','Appalto / sede di lavoro'],
+      criteria:[
+        {field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'dipendenti_non_forza',
-      label: '❌ Dipendenti Non in Forza',
-      desc: 'Dipendenti con stato NON IN FORZA',
-      criteria: [
-        { field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'NON IN FORZA', val2:'', connector:'AND' },
+      id:'dipendenti_non_forza', icon:'❌',
+      label:'Dipendenti Non in Forza',
+      desc:'Dipendenti con stato NON IN FORZA',
+      table:'dipendenti',
+      cols:['N° Socio','Azienda','Cognome','Nome','Mansione','Stato Dipendente','Data assunzione'],
+      criteria:[
+        {field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'NON IN FORZA', val2:'', connector:'AND'},
       ]
     },
   ],
   formazione: [
     {
-      id: 'form_scadenza_mese',
-      label: '📅 Scadenzario Formazione — Mese Corrente e Prossimo',
-      desc: 'Corsi con scadenza nel mese corrente o nel prossimo',
-      criteria: [
-        { field:'Scadenza Corso', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND' },
-        { field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND' },
+      id:'form_scadenza_mese', icon:'📅',
+      label:'Scadenzario Formazione — Mese Corrente e Prossimo',
+      desc:'Corsi con scadenza nei prossimi 60 giorni',
+      table:'formazione',
+      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Stato Dipendente','Mansione','Appalto / sede di lavoro','Tipologia Corso','Scadenza Corso','Stato Corso'],
+      criteria:[
+        {field:'Scadenza Corso', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
+        {field:'Stato Corso',    fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'form_corso_base_scadenza',
-      label: '📅 Scadenzario Corso Base — Mese Corrente e Prossimo',
-      desc: 'Corso Base con scadenza nel mese corrente o nel prossimo',
-      criteria: [
-        { field:'Tipologia Corso', fieldDef:{type:'select'}, op:'is', val1:'Corso Base', val2:'', connector:'AND' },
-        { field:'Scadenza Corso', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND' },
+      id:'form_corso_base', icon:'📅',
+      label:'Scadenzario Corso Base — Mese Corrente e Prossimo',
+      desc:'Corso Base in scadenza nei prossimi 60 giorni',
+      table:'formazione',
+      cols:['Cognome','Nome','Mansione','Stato Dipendente','Appalto / sede di lavoro','Tipologia Corso','Scadenza Corso','Azienda'],
+      criteria:[
+        {field:'Tipologia Corso', fieldDef:{type:'select'}, op:'is', val1:'Corso Base', val2:'', connector:'AND'},
+        {field:'Scadenza Corso',  fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'form_da_completare',
-      label: '⏳ Formazione Da Completare',
-      desc: 'Tutti i corsi con stato "Da completare"',
-      criteria: [
-        { field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Da completare', val2:'', connector:'AND' },
+      id:'form_da_completare', icon:'⏳',
+      label:'Formazione Da Completare',
+      desc:'Corsi con stato "Da completare"',
+      table:'formazione',
+      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'],
+      criteria:[
+        {field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Da completare', val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'form_scaduti',
-      label: '🔴 Formazione Scaduta',
-      desc: 'Corsi con scadenza già passata',
-      criteria: [
-        { field:'Scadenza Corso', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND' },
-        { field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND' },
+      id:'form_scaduti', icon:'🔴',
+      label:'Formazione Scaduta',
+      desc:'Corsi con scadenza già passata',
+      table:'formazione',
+      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Scadenza Corso','Stato Corso'],
+      criteria:[
+        {field:'Scadenza Corso', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND'},
+        {field:'Stato Corso',    fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND'},
       ]
     },
   ],
   sorveglianza: [
     {
-      id: 'sorv_scadenza_mese',
-      label: '📅 Scadenze Idoneità — Mese Corrente e Prossimo',
-      desc: 'Visite con scadenza idoneità nel mese corrente o nel prossimo',
-      criteria: [
-        { field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND' },
+      id:'sorv_scadenza_mese', icon:'📅',
+      label:'Scadenze Idoneità — Mese Corrente e Prossimo',
+      desc:'Visite con scadenza nei prossimi 60 giorni',
+      table:'sorveglianza',
+      cols:['Azienda','Cognome','Nome','Mansione','Appalto / sede di lavoro','Data assunzione','Scadenza Idoneità','Stato idoneità','Data Analisi','Note'],
+      criteria:[
+        {field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'sorv_non_idonei',
-      label: '🔴 Non Idonei / In Attesa',
-      desc: 'Dipendenti non idonei o in attesa di visita',
-      criteria: [
-        { field:'Stato idoneità', fieldDef:{type:'select'}, op:'is_not', val1:'Idoneo', val2:'', connector:'AND' },
-        { field:'Stato idoneità', fieldDef:{type:'select'}, op:'is_not_empty', val1:'', val2:'', connector:'AND' },
+      id:'sorv_scaduti', icon:'🔴',
+      label:'Idoneità Scaduta',
+      desc:'Dipendenti con scadenza idoneità già passata',
+      table:'sorveglianza',
+      cols:['Azienda','Cognome','Nome','Mansione','Scadenza Idoneità','Stato idoneità','Medico'],
+      criteria:[
+        {field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'sorv_scaduti',
-      label: '🔴 Idoneità Scaduta',
-      desc: 'Dipendenti con scadenza idoneità già passata',
-      criteria: [
-        { field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND' },
+      id:'sorv_prescrizioni', icon:'🟡',
+      label:'Idonei con Prescrizioni',
+      desc:'Dipendenti con prescrizioni mediche',
+      table:'sorveglianza',
+      cols:['Azienda','Cognome','Nome','Mansione','Scadenza Idoneità','Stato idoneità','Note prescrizione','Medico'],
+      criteria:[
+        {field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'prescrizioni', val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'sorv_con_prescrizioni',
-      label: '🟡 Idonei con Prescrizioni',
-      desc: 'Dipendenti idonei con prescrizioni mediche',
-      criteria: [
-        { field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'prescrizioni', val2:'', connector:'AND' },
+      id:'sorv_in_attesa', icon:'🔵',
+      label:'In Attesa di Visita',
+      desc:'Dipendenti in attesa di visita medica',
+      table:'sorveglianza',
+      cols:['Azienda','Cognome','Nome','Mansione','Data visita medica','Scadenza Idoneità','Stato idoneità'],
+      criteria:[
+        {field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'attesa', val2:'', connector:'AND'},
       ]
     },
   ],
   contratti: [
     {
-      id: 'cont_scadenza_mese',
-      label: '📅 Contratti in Scadenza — Prossimi 30 Giorni',
-      desc: 'Contratti a tempo determinato in scadenza nel prossimo mese',
-      criteria: [
-        { field:'Scadenza Contratto', fieldDef:{type:'date'}, op:'next_30_days', val1:'', val2:'', connector:'AND' },
-        { field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Tempo determinato', val2:'', connector:'AND' },
+      id:'cont_scadenza_30', icon:'📅',
+      label:'Contratti in Scadenza — Prossimi 30 Giorni',
+      desc:'Contratti a tempo determinato in scadenza',
+      table:'contratti',
+      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Data inizio','Scadenza Contratto','Mansione'],
+      criteria:[
+        {field:'Scadenza Contratto',       fieldDef:{type:'date'},   op:'next_30_days', val1:'', val2:'', connector:'AND'},
+        {field:'Tipologia contrattuale',   fieldDef:{type:'select'}, op:'is', val1:'Tempo determinato', val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'cont_tempo_indeterminato',
-      label: '✅ Contratti Tempo Indeterminato',
-      desc: 'Tutti i contratti a tempo indeterminato attivi',
-      criteria: [
-        { field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Tempo indeterminato', val2:'', connector:'AND' },
-        { field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO', val2:'', connector:'AND' },
+      id:'cont_indeterminato', icon:'✅',
+      label:'Contratti Tempo Indeterminato Attivi',
+      desc:'Tutti i contratti a tempo indeterminato',
+      table:'contratti',
+      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Data inizio','Mansione'],
+      criteria:[
+        {field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Tempo indeterminato', val2:'', connector:'AND'},
+        {field:'Stato Dipendente',       fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',              val2:'', connector:'AND'},
       ]
     },
     {
-      id: 'cont_intermittente',
-      label: '🔄 Contratti Intermittenti',
-      desc: 'Tutti i contratti di lavoro intermittente',
-      criteria: [
-        { field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Lavoro intermittente', val2:'', connector:'AND' },
+      id:'cont_intermittente', icon:'🔄',
+      label:'Contratti Intermittenti',
+      desc:'Tutti i contratti di lavoro intermittente',
+      table:'contratti',
+      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Data inizio'],
+      criteria:[
+        {field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Lavoro intermittente', val2:'', connector:'AND'},
       ]
     },
   ],
-  aziende: [],
+  aziende:[],
 };
 
+// ── Dynamic criteria helpers ──────────────────────────────────────────────────
+function buildDynamicCriteria(dynamicKey){
+  if(dynamicKey === 'entrate_uscite'){
+    // Settimana precedente: da lunedi scorso a domenica scorsa
+    const now = new Date();
+    const dayOfWeek = now.getDay(); // 0=dom, 1=lun...
+    const daysToLastMon = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const lastMon = new Date(now); lastMon.setDate(now.getDate() - daysToLastMon - 7);
+    const lastSun = new Date(lastMon); lastSun.setDate(lastMon.getDate() + 6);
+    const fromISO = lastMon.toISOString().slice(0,10);
+    const toISO   = lastSun.toISOString().slice(0,10);
+    return [
+      {field:'Data assunzione',      fieldDef:{type:'date'}, op:'between', val1:fromISO, val2:toISO, connector:'AND'},
+    ];
+  }
+  return [];
+}
+
+// ── Quick search modal ────────────────────────────────────────────────────────
 App.openQuickSearches = function(t){
   const searches = QUICK_SEARCHES[t] || [];
   const meta = TABLE_META[t];
-
-  if(!searches.length){
-    toast('Nessuna ricerca rapida disponibile per questa tabella', 'error');
-    return;
-  }
+  if(!searches.length){ toast('Nessuna ricerca rapida per questa tabella','error'); return; }
 
   document.getElementById('modal-title').textContent = '⚡ Ricerche Rapide — '+meta.label;
 
   let html = '<div class="quick-search-grid">';
   searches.forEach(s => {
-    // Count matching records
-    const count = Store.getRows(t).filter(r => advMatchesCriteria(r, s.criteria)).length;
+    const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
+    const srcRows = Store.getRows(s.table || t);
+    const count = srcRows.filter(r => advMatchesCriteria(r, crit)).length;
     html += `
-      <div class="quick-card" onclick="App.applyQuickSearch('${t}','${s.id}')">
-        <div class="quick-card-label">${s.label}</div>
+      <div class="quick-card" onclick="App.runQuickSearch('${t}','${s.id}')">
+        <div class="quick-card-icon">${s.icon}</div>
+        <div class="quick-card-label">${esc(s.label)}</div>
         <div class="quick-card-desc">${esc(s.desc)}</div>
         <div class="quick-card-count">${count} record</div>
       </div>`;
@@ -2331,15 +2407,148 @@ App.openQuickSearches = function(t){
   App.openModal();
 };
 
-App.applyQuickSearch = function(t, id){
+// ── Run quick search → show results in styled table inside modal ──────────────
+App.runQuickSearch = function(t, id){
   const searches = QUICK_SEARCHES[t] || [];
   const s = searches.find(x => x.id === id);
   if(!s) return;
-  App.advCriteria = s.criteria;
+
+  const srcTable = s.table || t;
+  const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
+  const allRows = Store.getRows(srcTable);
+  const storeCols = Store.getCols(srcTable);
+  const rows = allRows.filter(r => advMatchesCriteria(r, crit));
+
+  // Use only cols that exist in store
+  const cols = s.cols.filter(c => storeCols.includes(c));
+
+  // Sort by Cognome if available
+  if(cols.includes('Cognome')) rows.sort((a,b) => (a.Cognome||'').localeCompare(b.Cognome||''));
+
+  document.getElementById('modal-title').textContent = s.icon+' '+s.label+' ('+rows.length+' record)';
+
+  // Build HTML table like the original reports
+  const thead = cols.map(c => `<th>${esc(c)}</th>`).join('');
+
+  // Status color for certain columns
+  const tbody = rows.map((row, ri) => {
+    const tds = cols.map(c => {
+      const v = row[c] || '';
+      if(c === 'Stato idoneità' || c === 'Stato Corso' || c === 'Stato Dipendente') return '<td>'+pill(v)+'</td>';
+      // Highlight expiring dates in orange/red
+      if(c.toLowerCase().includes('scadenza') || c.toLowerCase().includes('scad')){
+        const d = advParseDate(v);
+        const now = new Date();
+        const lim30 = new Date(); lim30.setDate(now.getDate()+30);
+        if(d && d < now)  return `<td style="color:var(--danger);font-weight:700">${esc(v)}</td>`;
+        if(d && d < lim30) return `<td style="color:var(--warn);font-weight:700">${esc(v)}</td>`;
+      }
+      return `<td>${esc(v)}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('') || '<tr><td colspan="99" style="text-align:center;padding:24px;color:var(--text3)">Nessun risultato</td></tr>';
+
+  const html = `
+    <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--text3)">${esc(s.desc)}</span>
+      <span style="font-family:var(--font-mono);font-size:12px;background:#dbeafe;color:var(--accent);padding:2px 10px;border-radius:12px;font-weight:700">${rows.length} record</span>
+    </div>
+    <div class="table-scroll" style="max-height:55vh">
+      <table class="quick-result-table">
+        <thead><tr>${thead}</tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    </div>`;
+
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('modal-footer').innerHTML = `
+    <button class="btn btn-ghost" onclick="App.openQuickSearches('${t}')">← Torna alle ricerche</button>
+    <button class="btn btn-ghost" style="font-size:13px" onclick="App.printQuickResult('${s.id}','${t}')">🖨 Stampa</button>
+    <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportQuickResult('${s.id}','${t}')">↓ Excel</button>
+    <button class="btn btn-primary" onclick="App.applyQuickFilter('${t}','${s.id}')">Mostra in tabella</button>`;
+};
+
+// ── Apply quick filter to main table ─────────────────────────────────────────
+App.applyQuickFilter = function(t, id){
+  const searches = QUICK_SEARCHES[t] || [];
+  const s = searches.find(x => x.id === id);
+  if(!s) return;
+  App.advCriteria = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   App.filter = '';
   document.getElementById('search-input').value = '';
   App.page = 1;
   App.closeModal();
   App.renderTable(t);
-  toast(`"${s.label}" — ${App.filtered.length} risultati`);
+  toast(s.icon+' '+s.label+' — '+App.filtered.length+' risultati');
+};
+
+// ── Print quick result ────────────────────────────────────────────────────────
+App.printQuickResult = function(id, t){
+  const searches = QUICK_SEARCHES[t] || [];
+  const s = searches.find(x => x.id === id);
+  if(!s) return;
+  const srcTable = s.table || t;
+  const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
+  const allRows = Store.getRows(srcTable);
+  const storeCols = Store.getCols(srcTable);
+  const rows = allRows.filter(r => advMatchesCriteria(r, crit));
+  if(rows.includes && rows.sort) rows.sort((a,b) => (a.Cognome||'').localeCompare(b.Cognome||''));
+  const cols = s.cols.filter(c => storeCols.includes(c));
+  const oggi = new Date().toLocaleDateString('it-IT');
+  const thead = cols.map(c=>`<th>${esc(c)}</th>`).join('');
+  const tbody = rows.map(r=>'<tr>'+cols.map(c=>{
+    const v=r[c]||'';
+    const d=advParseDate(v);
+    const now=new Date(), lim30=new Date(); lim30.setDate(now.getDate()+30);
+    const style=(c.toLowerCase().includes('scad')&&d)?(d<now?'color:#dc2626;font-weight:700':d<lim30?'color:#d97706;font-weight:700':''):'';
+    return `<td${style?` style="${style}"`:''}>${esc(v)}</td>`;
+  }).join('')+'</tr>').join('');
+
+  const html=`<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"/>
+  <title>${s.label}</title>
+  <style>
+    @page{size:A4 landscape;margin:8mm 8mm 10mm 8mm;}
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:Arial,sans-serif;font-size:8px;color:#111;}
+    .header{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:8px;border-bottom:2px solid #1F4E79;padding-bottom:5px;}
+    .header h1{font-size:13px;font-weight:800;color:#1F4E79;}
+    .header p{font-size:8px;color:#555;}
+    table{width:100%;border-collapse:collapse;table-layout:fixed;}
+    th{background:#1F4E79;color:#fff;padding:4px 5px;font-size:7px;font-weight:700;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;}
+    td{padding:4px 5px;border-bottom:1px solid #e5e7eb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    tr:nth-child(even) td{background:#EBF3FB;}
+    .footer{margin-top:6px;font-size:7px;color:#999;display:flex;justify-content:space-between;}
+    @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}thead{display:table-header-group;}tr{page-break-inside:avoid;}}
+  </style></head><body>
+  <div class="header">
+    <div><h1>${s.icon} ${s.label}</h1><p>${esc(s.desc)} · ${rows.length} record</p></div>
+    <p>Stampato il ${oggi}</p>
+  </div>
+  <table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>
+  <div class="footer"><span>Gestionale Dipendenti</span><span>${rows.length} record — ${oggi}</span></div>
+  <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
+  </body></html>`;
+  const w=window.open('','_blank');
+  if(!w){toast('Abilita i popup','error');return;}
+  w.document.write(html); w.document.close();
+};
+
+// ── Export quick result to Excel ──────────────────────────────────────────────
+App.exportQuickResult = function(id, t){
+  const searches = QUICK_SEARCHES[t] || [];
+  const s = searches.find(x => x.id === id);
+  if(!s) return;
+  const srcTable = s.table || t;
+  const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
+  const allRows = Store.getRows(srcTable);
+  const storeCols = Store.getCols(srcTable);
+  const rows = allRows.filter(r => advMatchesCriteria(r, crit));
+  const cols = s.cols.filter(c => storeCols.includes(c));
+  const data=[cols,...rows.map(r=>cols.map(c=>r[c]||''))];
+  const ws=XLSX.utils.aoa_to_sheet(data);
+  ws['!cols']=cols.map(c=>({wch:Math.max(c.length,12)}));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,s.label.slice(0,31));
+  XLSX.writeFile(wb,s.label.replace(/[^a-zA-Z0-9]/g,'_').slice(0,50)+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  toast('Excel scaricato ✓');
 };
