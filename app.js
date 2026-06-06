@@ -1781,7 +1781,9 @@ App.openAdvSearch = function(t){
   document.getElementById('modal-title').textContent = '🔍 Ricerca Avanzata — '+TABLE_META[t].label;
   document.getElementById('modal-body').innerHTML = `
     <div class="adv-info">
-      Aggiungi uno o più criteri. I risultati rispettano <strong>tutti</strong> i criteri (logica AND).
+      Aggiungi uno o più criteri. Tra un criterio e l'altro appare il connettore
+      <strong style="color:var(--accent)">AND</strong> (devono essere entrambi veri) oppure
+      <strong style="color:var(--warn)">OR</strong> (basta uno dei due) — cliccaci sopra per cambiarlo.
     </div>
     <div id="adv-rows"></div>
     <button type="button" class="btn btn-ghost" style="margin-top:12px;font-size:13px;color:var(--accent);border-color:var(--accent)" onclick="App.addAdvRow()">
