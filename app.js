@@ -663,6 +663,7 @@ const App = {
       btnWrap.id = 'dash-btns';
       btnWrap.style.cssText = 'display:flex;gap:8px;margin-left:auto';
       btnWrap.innerHTML =
+        '<button class="btn btn-ghost" style="font-size:13px" onclick="App.openStats()">📊 Statistiche per Anno</button>' +
         '<button class="btn btn-ghost" style="font-size:13px" onclick="App.exportGestionale()">↓ Esporta Gestionale</button>' +
         '<button class="btn btn-primary" style="font-size:13px" onclick="App.importXLSX(\"dipendenti\")">📂 Importa Gestionale</button>';
       topbarEl.appendChild(btnWrap);
@@ -1455,6 +1456,10 @@ const App = {
     input.onchange=async(e)=>{
       const file=e.target.files[0]; if(!file)return;
       try{
+        if(typeof XLSX === 'undefined'){
+          toast('Libreria Excel non caricata — verifica la connessione internet','error');
+          return;
+        }
         const buf=await file.arrayBuffer();
         const wb=XLSX.read(buf,{type:'array',raw:false,cellDates:false,cellText:true});
         const sheetMap=this._sheetMap();
@@ -1580,6 +1585,8 @@ const App = {
     Store.save(t);
     const b=document.getElementById('badge-'+t); if(b)b.textContent=Store.getRows(t).length;
     if(this.table===t) this.renderTable(t);
+    // Se siamo nella dashboard, aggiorna la dashboard
+    if(this.view==='dashboard') this.renderDash();
   },
 
   _doAppend(t,rawRows){
@@ -2551,4 +2558,251 @@ App.exportQuickResult = function(id, t){
   XLSX.utils.book_append_sheet(wb,ws,s.label.slice(0,31));
   XLSX.writeFile(wb,s.label.replace(/[^a-zA-Z0-9]/g,'_').slice(0,50)+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   toast('Excel scaricato ✓');
+};
+
+// ─── STATISTICHE PER ANNO ─────────────────────────────────────────────────────
+
+const EU_COUNTRIES = new Set([
+  'italiana','italiano','italiana/o','italiana / italiano',
+  'tedesca','francese','spagnola','portoghese','olandese','belga','austriaca',
+  'greca','polacca','rumena','bulgara','ungherese','ceca','slovacca','slovena',
+  'croata','estone','lettone','lituana','finlandese','svedese','danese',
+  'irlandese','cipriota','lussemburghese','maltese','ue','europea',
+  'germany','france','spain','poland','romania','portugal','netherlands',
+  'eu','european','comunitario','comunitaria'
+]);
+
+function isEU(cittadinanza){
+  if(!cittadinanza) return false;
+  return EU_COUNTRIES.has(cittadinanza.toLowerCase().trim());
+}
+
+function parseYear(dateStr){
+  if(!dateStr) return null;
+  const p = dateStr.split(/[\/\-]/);
+  if(p.length !== 3) return null;
+  const y = p[0].length === 4 ? parseInt(p[0]) : parseInt(p[2]);
+  return isNaN(y) ? null : y;
+}
+
+App.openStats = function(){
+  // Build year selector from 2020 to current year
+  const currentYear = new Date().getFullYear();
+  const years = [];
+  for(let y = currentYear; y >= 2020; y--) years.push(y);
+
+  document.getElementById('modal-title').textContent = '📊 Statistiche per Anno';
+  document.getElementById('modal-body').innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap">
+      <label style="font-size:13px;font-weight:700;color:var(--text2)">Anno di riferimento:</label>
+      <select id="stats-year" onchange="App.renderStats()" style="font-size:15px;font-weight:700;padding:8px 16px;border-radius:8px;border:2px solid var(--accent);color:var(--accent);background:var(--surface);cursor:pointer;outline:none">
+        ${years.map(y => `<option value="${y}">${y}</option>`).join('')}
+      </select>
+      <span style="font-size:12px;color:var(--text3)">Scorri per cambiare anno</span>
+    </div>
+    <div id="stats-content"></div>`;
+
+  document.getElementById('modal-footer').innerHTML =
+    `<button class="btn btn-ghost" onclick="App.printStats()">🖨 Stampa</button>
+     <button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
+
+  this.openModal();
+  this.renderStats();
+
+  // Mouse wheel on year selector
+  document.getElementById('stats-year').addEventListener('wheel', function(e){
+    e.preventDefault();
+    const opts = [...this.options];
+    const cur = this.selectedIndex;
+    if(e.deltaY > 0 && cur < opts.length-1) this.selectedIndex = cur+1;
+    if(e.deltaY < 0 && cur > 0) this.selectedIndex = cur-1;
+    App.renderStats();
+  }, {passive:false});
+};
+
+App.renderStats = function(){
+  const year = parseInt(document.getElementById('stats-year').value);
+  const dip  = Store.getRows('dipendenti');
+  const cont = Store.getRows('contratti');
+  const form = Store.getRows('formazione');
+
+  const AZIENDE = ['ALIANTE Soc. Coop.','CAPITOLINA LOGISTICA Scarl','FIPAM  Scarl',
+                   'SERIAM Scarl','CONSORZIO CAPITOLINA Srl','SNA Servizi & Management Srl'];
+
+  // Filter dipendenti active in selected year
+  // A dipendente is "active" in a year if: assunto <= year AND (non in forza solo dopo year OR ancora attivo)
+  function activeInYear(r, yr){
+    const assYear = parseYear(r['Data assunzione']);
+    const fineStr = r['Data fine rapporto'] || r['Data licenziamento'] || '';
+    const fineYear = parseYear(fineStr);
+    if(!assYear || assYear > yr) return false;
+    if(fineYear && fineYear < yr) return false;
+    return true;
+  }
+
+  // Get contratti for a dipendente in year
+  function contrattiForDip(nsocio, yr){
+    return cont.filter(c => {
+      const id = c['Id Dipendente (N° Socio)']||'';
+      if(id.trim() !== nsocio.trim()) return false;
+      const startY = parseYear(c['Data inizio']||c['Data assunzione']||'');
+      const endY   = parseYear(c['Data fine']||c['Scadenza Contratto']||'');
+      if(!startY || startY > yr) return false;
+      if(endY && endY < yr) return false;
+      return true;
+    });
+  }
+
+  // Build stats per azienda
+  const stats = {};
+  AZIENDE.forEach(az => {
+    stats[az] = {
+      attivi:0, non_attivi:0,
+      maschi:0, femmine:0,
+      det:0, indet:0,
+      fulltime:0, parttime:0,
+      eu:0, extraeu:0,
+    };
+  });
+  stats['Altre/Non specificata'] = {attivi:0,non_attivi:0,maschi:0,femmine:0,det:0,indet:0,fulltime:0,parttime:0,eu:0,extraeu:0};
+
+  dip.forEach(r => {
+    const az = AZIENDE.find(a => a.trim() === (r.Azienda||'').trim()) || 'Altre/Non specificata';
+    const active = activeInYear(r, year);
+    if(active) stats[az].attivi++;
+    else stats[az].non_attivi++;
+
+    // Sesso
+    const sesso = (r.Sesso||'').toLowerCase();
+    if(sesso.includes('maschio') || sesso.includes('m')) stats[az].maschi++;
+    else if(sesso.includes('femmina') || sesso.includes('f')) stats[az].femmine++;
+
+    // Cittadinanza EU/ExtraEU
+    if(isEU(r.Cittadinanza || r['Nazionalità'] || '')) stats[az].eu++;
+    else if(r.Cittadinanza || r['Nazionalità']) stats[az].extraeu++;
+
+    // Tipo contratto e orario dal foglio contratti
+    const nsocio = r['N° Socio']||'';
+    if(nsocio){
+      const cs = contrattiForDip(nsocio, year);
+      if(cs.length){
+        const last = cs[cs.length-1];
+        const tipo = (last['Tipologia contrattuale']||'').toLowerCase();
+        if(tipo.includes('indeterminato')) stats[az].indet++;
+        else if(tipo.includes('determinato') || tipo.includes('intermittente')) stats[az].det++;
+        const orario = (last['Tipologia orario contrattuale']||'').toLowerCase();
+        if(orario.includes('full')) stats[az].fulltime++;
+        else if(orario.includes('part')) stats[az].parttime++;
+      }
+    }
+  });
+
+  // Formazione per tipo e per anno (filtrata per year)
+  const formByTipo = {};
+  form.forEach(r => {
+    const y = parseYear(r['Data Corso'] || r['Data']||'');
+    if(y !== year) return;
+    const tipo = r['Tipologia Corso'] || r['Tipo formazione'] || 'N/D';
+    if(!formByTipo[tipo]) formByTipo[tipo] = 0;
+    formByTipo[tipo]++;
+  });
+  const totalForm = Object.values(formByTipo).reduce((a,b)=>a+b,0);
+
+  // ── Render ──────────────────────────────────────────────
+  function statRow(label, val, color=''){
+    return `<div class="stat-row">
+      <span class="stat-row-label">${label}</span>
+      <span class="stat-row-val" ${color?`style="color:${color};font-weight:700"`:''}}>${val}</span>
+    </div>`;
+  }
+
+  function azCard(az){
+    const s = stats[az];
+    const tot = s.attivi + s.non_attivi;
+    if(!tot) return '';
+    const shortAz = az.replace(' Soc. Coop.','').replace(' Scarl','').replace(' Srl','');
+    return `<div class="stats-az-card">
+      <div class="stats-az-header">${shortAz}</div>
+      <div class="stats-az-body">
+        <div class="stats-section-title">👤 Stato Dipendenti</div>
+        ${statRow('✅ Attivi', s.attivi, 'var(--success)')}
+        ${statRow('❌ Non in forza', s.non_attivi, 'var(--danger)')}
+        ${statRow('Totale', tot)}
+        <div class="stats-section-title">⚥ Genere</div>
+        ${statRow('👨 Uomini', s.maschi)}
+        ${statRow('👩 Donne', s.femmine)}
+        <div class="stats-section-title">📄 Tipo Contratto</div>
+        ${statRow('Tempo indeterminato', s.indet, 'var(--success)')}
+        ${statRow('Tempo determinato', s.det)}
+        <div class="stats-section-title">⏱ Orario</div>
+        ${statRow('Full Time', s.fulltime)}
+        ${statRow('Part Time', s.parttime)}
+        <div class="stats-section-title">🌍 Cittadinanza</div>
+        ${statRow('Comunitari (EU)', s.eu)}
+        ${statRow('Extracomunitari', s.extraeu, 'var(--warn)')}
+      </div>
+    </div>`;
+  }
+
+  const allAz = [...AZIENDE, 'Altre/Non specificata'];
+  const cardsHtml = allAz.map(az => azCard(az)).join('');
+
+  const formHtml = Object.entries(formByTipo).sort((a,b)=>b[1]-a[1]).map(([tipo,n]) => {
+    const pct = totalForm ? Math.round(n/totalForm*100) : 0;
+    return `<div class="bar-item">
+      <span class="bar-label" title="${esc(tipo)}">${esc(tipo)}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:var(--accent2)"></div></div>
+      <span class="bar-count">${n}</span>
+    </div>`;
+  }).join('') || '<p style="color:var(--text3);font-size:13px">Nessun corso registrato per questo anno.</p>';
+
+  document.getElementById('stats-content').innerHTML = `
+    <div style="margin-bottom:20px">
+      <div class="stats-year-title">Anno ${year}</div>
+    </div>
+    <div class="stats-az-grid">${cardsHtml}</div>
+    <div class="panel" style="margin-top:20px">
+      <div class="panel-header">🎓 Formazione per Tipo — Anno ${year} (${totalForm} corsi totali)</div>
+      <div class="panel-body">${formHtml}</div>
+    </div>`;
+};
+
+App.printStats = function(){
+  const year = parseInt(document.getElementById('stats-year')?.value || new Date().getFullYear());
+  const content = document.getElementById('stats-content')?.innerHTML || '';
+  const oggi = new Date().toLocaleDateString('it-IT');
+  const html = `<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"/>
+  <title>Statistiche ${year}</title>
+  <style>
+    @page{size:A4 portrait;margin:10mm;}
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:Arial,sans-serif;font-size:9px;color:#111;}
+    .header{border-bottom:2px solid #1F4E79;padding-bottom:6px;margin-bottom:12px;display:flex;justify-content:space-between;}
+    .header h1{font-size:14px;font-weight:800;color:#1F4E79;}
+    .stats-az-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;}
+    .stats-az-card{border:1px solid #d1d9e6;border-radius:6px;overflow:hidden;}
+    .stats-az-header{background:#1F4E79;color:#fff;padding:5px 8px;font-size:9px;font-weight:700;}
+    .stats-az-body{padding:6px 8px;}
+    .stats-section-title{font-size:8px;font-weight:700;color:#2E75B6;text-transform:uppercase;margin:5px 0 2px;letter-spacing:.04em;}
+    .stat-row{display:flex;justify-content:space-between;padding:1px 0;font-size:8px;border-bottom:1px solid #f1f5f9;}
+    .stat-row-val{font-weight:700;}
+    .bar-item{display:flex;align-items:center;gap:6px;margin-bottom:5px;}
+    .bar-label{font-size:8px;width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .bar-track{flex:1;height:6px;background:#e5e7eb;border-radius:3px;}
+    .bar-fill{height:100%;background:#0891b2;border-radius:3px;}
+    .bar-count{font-size:8px;width:24px;text-align:right;}
+    .panel{border:1px solid #d1d9e6;border-radius:6px;overflow:hidden;}
+    .panel-header{background:#f5f7fb;padding:6px 10px;font-size:9px;font-weight:700;border-bottom:1px solid #d1d9e6;}
+    .panel-body{padding:8px 10px;}
+    .footer{margin-top:8px;font-size:7px;color:#999;text-align:right;}
+    @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
+  </style></head><body>
+  <div class="header"><h1>📊 Statistiche Dipendenti — Anno ${year}</h1><span>${oggi}</span></div>
+  ${content}
+  <div class="footer">Gestionale Dipendenti — ${oggi}</div>
+  <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
+  </body></html>`;
+  const w=window.open('','_blank');
+  if(!w){toast('Abilita i popup','error');return;}
+  w.document.write(html); w.document.close();
 };
