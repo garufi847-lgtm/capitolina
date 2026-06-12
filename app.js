@@ -358,11 +358,11 @@ const SECTIONS = {
 
 // colonne mostrate in tabella
 const TABLE_META = {
-  dipendenti:   {label:'Dipendenti',             cols:['N° Socio','Azienda','Cognome','Nome','Mansione','Stato Dipendente','Codice Fiscale'],                                                   status:null},
-  contratti:    {label:'Contratti di Lavoro',    cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Scadenza Contratto'],                          status:null},
-  formazione:   {label:'Formazione',             cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'],                    status:'Stato Corso'},
-  sorveglianza: {label:'Sorveglianza Sanitaria', cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Data visita medica','Scadenza Idoneità','Stato idoneità'],                        status:'Stato idoneità'},
-  aziende:      {label:'Anagrafica Aziende',     cols:['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO'],                                                                       status:null},
+  dipendenti:   {label:'Dipendenti',             cols:['N° Socio','Azienda','Cognome','Nome','Mansione','Stato Dipendente','Codice Fiscale'],   status:null},
+  contratti:    {label:'Contratti di Lavoro',    cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Scadenza Contratto','Stato Dipendente'], status:null},
+  formazione:   {label:'Formazione',             cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso','Stato Dipendente'], status:'Stato Corso'},
+  sorveglianza: {label:'Sorveglianza Sanitaria', cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Data visita medica','Scadenza Idoneità','Stato idoneità','Stato dipendente'], status:'Stato idoneità'},
+  aziende:      {label:'Anagrafica Aziende',     cols:['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO'], status:null},
 };
 
 const SKIP = new Set(['_id','Riepilogo Dipendente','Riepilogo Dati contrattuali','Riepilogo Formazione',
@@ -1546,22 +1546,29 @@ const App = {
 
     for(const col of storeCols){
       // 1. Corrispondenza esatta
-      if(rawRow[col]!==undefined){ row[col]=String(rawRow[col]||''); continue; }
+      if(rawRow[col]!==undefined && rawRow[col]!==null){ row[col]=String(rawRow[col]||'').trim(); continue; }
       // 2. Corrispondenza case-insensitive
       const lc=col.toLowerCase().trim();
-      if(rawLower[lc]){ row[col]=String(rawRow[rawLower[lc]]||''); continue; }
+      if(rawLower[lc]){ const v=rawRow[rawLower[lc]]; row[col]=String(v||'').trim(); continue; }
       // 3. Varianti note
       const aliases={
-        'n° socio':          ['n socio','n.socio','nsocio','numero socio','n° socio'],
-        'id dipendente (n° socio)': ['id dipendente','id_dipendente','n° socio','n socio'],
-        'codice fiscale':    ['codice fiscale','codicefiscale','cf'],
-        'codice fiscale':    ['codice fiscale','codice_fiscale'],
-        'stato dipendente':  ['stato dipendente','stato_dipendente'],
-        'stato dipendente':  ['stato dipendente'],
-        'data assunzione':   ['data assunzione','data_assunzione'],
-        'tipologia corso':   ['tipo formazione','tipologia corso'],
-        'scadenza idoneità': ['scadenza idoneita','scadenza idoneit'],
-        'stato idoneità':    ['stato idoneita','stato idoneit'],
+        'n° socio':               ['n socio','n.socio','nsocio','numero socio','n° socio','matricola'],
+        'id dipendente (n° socio)':['id dipendente','id_dipendente','n° socio','n socio','matricola'],
+        'codice fiscale':         ['codice fiscale','codicefiscale','cf','cod. fiscale','cod fiscale'],
+        'stato dipendente':       ['stato dipendente','stato_dipendente','stato','status dipendente','stato dip'],
+        'stato dipendente':       ['stato dipendente','stato_dipendente'],
+        'data assunzione':        ['data assunzione','data_assunzione','data di assunzione','assunzione'],
+        'tipologia corso':        ['tipo formazione','tipologia corso','tipo corso','tipo_corso'],
+        'scadenza idoneità':      ['scadenza idoneita','scadenza idoneit','scad. idoneità','scad idoneita'],
+        'stato idoneità':         ['stato idoneita','stato idoneit','stato_idoneità','giudizio'],
+        'tipologia contrattuale': ['tipo contratto','tipologia contratto','tipo_contratto'],
+        'data di nascita':        ['data nascita','data_nascita','nascita','datanascita'],
+        'luogo di nascita':       ['luogo nascita','luogo_nascita','città nascita'],
+        'appalto / sede di lavoro':['appalto','sede lavoro','sede di lavoro','appalto sede'],
+        'azienda':                ['ragione sociale','azienda','società','societa'],
+        'mansione':               ['mansione','qualifica','ruolo','job'],
+        'telefono cellulare':     ['telefono','cellulare','cell','tel','recapito telefonico'],
+        'data scadenza permesso soggiorno':['scadenza permesso','scad. permesso','scadenza ps'],
       };
       const found=Object.entries(aliases).find(([k])=>k===lc);
       if(found){
@@ -1577,7 +1584,9 @@ const App = {
   },
 
   _doReplace(t,rawRows){
-    Store.data[t].rows=rawRows.map(r=>{
+    // Salta righe completamente vuote
+    const validRows=rawRows.filter(r=>Object.values(r).some(v=>v!==null&&v!==undefined&&String(v).trim()!==''));
+    Store.data[t].rows=validRows.map(r=>{
       const row=this._mapRow(t,r);
       row._id=Date.now().toString(36)+Math.random().toString(36).slice(2);
       return row;
@@ -1590,7 +1599,8 @@ const App = {
   },
 
   _doAppend(t,rawRows){
-    rawRows.forEach(r=>{
+    const validRows=rawRows.filter(r=>Object.values(r).some(v=>v!==null&&v!==undefined&&String(v).trim()!==''));
+    validRows.forEach(r=>{
       const row=this._mapRow(t,r);
       Store.addRow(t,row);
     });
@@ -2627,25 +2637,22 @@ App.renderStats = function(){
   const form = Store.getRows('formazione');
 
   const AZIENDE = ['ALIANTE Soc. Coop.','CAPITOLINA LOGISTICA Scarl','FIPAM  Scarl',
-                   'SERIAM Scarl','CONSORZIO CAPITOLINA Srl','SNA Servizi & Management Srl'];
+                   'SERIAM Scarl','CONSORZIO CAPITOLINA Srl','SNA Servizi & Management Srl',"SOCIETA' CESTINO"];
 
-  // Filter dipendenti active in selected year
-  // A dipendente is "active" in a year if: assunto <= year AND (non in forza solo dopo year OR ancora attivo)
   function activeInYear(r, yr){
-    const assYear = parseYear(r['Data assunzione']);
-    const fineStr = r['Data fine rapporto'] || r['Data licenziamento'] || '';
+    const assYear = parseYear(r['Data assunzione']||r['Data Assunzione']||'');
+    const fineStr = r['Data fine rapporto']||'';
     const fineYear = parseYear(fineStr);
     if(!assYear || assYear > yr) return false;
     if(fineYear && fineYear < yr) return false;
     return true;
   }
 
-  // Get contratti for a dipendente in year
   function contrattiForDip(nsocio, yr){
     return cont.filter(c => {
-      const id = c['Id Dipendente (N° Socio)']||'';
-      if(id.trim() !== nsocio.trim()) return false;
-      const startY = parseYear(c['Data inizio']||c['Data assunzione']||'');
+      const id = (c['Id Dipendente (N° Socio)']||c['Matricola']||'').trim();
+      if(!id || id !== nsocio.trim()) return false;
+      const startY = parseYear(c['Data inizio']||c['Data assunzione']||c['Data Assunzione']||'');
       const endY   = parseYear(c['Data fine']||c['Scadenza Contratto']||'');
       if(!startY || startY > yr) return false;
       if(endY && endY < yr) return false;
@@ -2653,84 +2660,95 @@ App.renderStats = function(){
     });
   }
 
-  // Build stats per azienda
+  // Build stats per azienda with M/F breakdown for each metric
   const stats = {};
-  AZIENDE.forEach(az => {
+  [...AZIENDE, 'Altra'].forEach(az => {
     stats[az] = {
-      attivi:0, non_attivi:0,
-      maschi:0, femmine:0,
-      det:0, indet:0,
-      fulltime:0, parttime:0,
-      eu:0, extraeu:0,
+      attivi:{tot:0,m:0,f:0},  non_attivi:{tot:0,m:0,f:0},
+      det:{tot:0,m:0,f:0},     indet:{tot:0,m:0,f:0},
+      fulltime:{tot:0,m:0,f:0},parttime:{tot:0,m:0,f:0},
+      eu:{tot:0,m:0,f:0},      extraeu:{tot:0,m:0,f:0},
     };
   });
-  stats['Altre/Non specificata'] = {attivi:0,non_attivi:0,maschi:0,femmine:0,det:0,indet:0,fulltime:0,parttime:0,eu:0,extraeu:0};
 
   dip.forEach(r => {
-    const az = AZIENDE.find(a => a.trim() === (r.Azienda||'').trim()) || 'Altre/Non specificata';
-    const active = activeInYear(r, year);
-    if(active) stats[az].attivi++;
-    else stats[az].non_attivi++;
-
-    // Sesso
+    const az = AZIENDE.find(a => a.trim() === (r.Azienda||'').trim()) || 'Altra';
     const sesso = (r.Sesso||'').toLowerCase();
-    if(sesso.includes('maschio') || sesso.includes('m')) stats[az].maschi++;
-    else if(sesso.includes('femmina') || sesso.includes('f')) stats[az].femmine++;
+    const isM = sesso.includes('maschio')||sesso==='m';
+    const isF = sesso.includes('femmina')||sesso==='f';
+    const mf  = isM?'m':isF?'f':null;
 
-    // Cittadinanza EU/ExtraEU
-    if(isEU(r.Cittadinanza || r['Nazionalità'] || '')) stats[az].eu++;
-    else if(r.Cittadinanza || r['Nazionalità']) stats[az].extraeu++;
+    function inc(obj){
+      obj.tot++;
+      if(mf) obj[mf]++;
+    }
 
-    // Tipo contratto e orario dal foglio contratti
-    const nsocio = r['N° Socio']||'';
+    const active = activeInYear(r, year);
+    if(active) inc(stats[az].attivi); else inc(stats[az].non_attivi);
+
+    // EU/ExtraEU
+    const citt = r.Cittadinanza||r['Nazionalità']||'';
+    if(citt){ if(isEU(citt)) inc(stats[az].eu); else inc(stats[az].extraeu); }
+
+    // Contratto e orario
+    const nsocio = (r['N° Socio']||'').trim();
     if(nsocio){
       const cs = contrattiForDip(nsocio, year);
       if(cs.length){
         const last = cs[cs.length-1];
         const tipo = (last['Tipologia contrattuale']||'').toLowerCase();
-        if(tipo.includes('indeterminato')) stats[az].indet++;
-        else if(tipo.includes('determinato') || tipo.includes('intermittente')) stats[az].det++;
+        if(tipo.includes('indeterminato')) inc(stats[az].indet);
+        else if(tipo.includes('determinato')||tipo.includes('intermittente')) inc(stats[az].det);
         const orario = (last['Tipologia orario contrattuale']||'').toLowerCase();
-        if(orario.includes('full')) stats[az].fulltime++;
-        else if(orario.includes('part')) stats[az].parttime++;
+        if(orario.includes('full')) inc(stats[az].fulltime);
+        else if(orario.includes('part')) inc(stats[az].parttime);
       }
     }
   });
 
-  // Formazione per tipo e per anno (filtrata per year)
+  // Formazione per tipo e anno
   const formByTipo = {};
   form.forEach(r => {
-    const y = parseYear(r['Data Corso'] || r['Data']||'');
+    const y = parseYear(r['Data Corso']||r['Data']||'');
     if(y !== year) return;
-    const tipo = r['Tipologia Corso'] || r['Tipo formazione'] || 'N/D';
-    if(!formByTipo[tipo]) formByTipo[tipo] = 0;
+    const tipo = r['Tipologia Corso']||r['Tipo formazione']||'N/D';
+    if(!formByTipo[tipo]) formByTipo[tipo]=0;
     formByTipo[tipo]++;
   });
   const totalForm = Object.values(formByTipo).reduce((a,b)=>a+b,0);
 
-  // ── Render ──────────────────────────────────────────────
-  function statRow(label, val, color=''){
+  // ── Render helpers ──────────────────────────────────────
+  function mfBadge(obj){
+    if(!obj.m && !obj.f) return '';
+    return `<span class="mf-badge">👨${obj.m||0} · 👩${obj.f||0}</span>`;
+  }
+  function statRow(label, obj, color=''){
+    const tot = obj.tot||obj||0;
+    const num = typeof obj === 'object' ? obj.tot : obj;
     return `<div class="stat-row">
       <span class="stat-row-label">${label}</span>
-      <span class="stat-row-val" ${color?`style="color:${color};font-weight:700"`:''}}>${val}</span>
+      <span class="stat-row-right">
+        ${typeof obj==='object'?mfBadge(obj):''}
+        <span class="stat-row-val"${color?` style="color:${color}"`:''}>${num}</span>
+      </span>
     </div>`;
   }
 
-  function azCard(az){
+  function azCard(az, idx){
     const s = stats[az];
-    const tot = s.attivi + s.non_attivi;
+    const tot = s.attivi.tot + s.non_attivi.tot;
     if(!tot) return '';
-    const shortAz = az.replace(' Soc. Coop.','').replace(' Scarl','').replace(' Srl','');
+    const shortAz = az.replace(' Soc. Coop.','').replace(' Scarl','').replace(' Srl','').replace("SOCIETA' CESTINO","CESTINO");
     return `<div class="stats-az-card">
-      <div class="stats-az-header">${shortAz}</div>
+      <div class="stats-az-header">
+        ${shortAz}
+        <button class="stats-print-btn" onclick="App.printSingleStats('${az.replace(/'/g,"\'")}',${year})" title="Stampa ${shortAz}">🖨</button>
+      </div>
       <div class="stats-az-body">
         <div class="stats-section-title">👤 Stato Dipendenti</div>
         ${statRow('✅ Attivi', s.attivi, 'var(--success)')}
         ${statRow('❌ Non in forza', s.non_attivi, 'var(--danger)')}
-        ${statRow('Totale', tot)}
-        <div class="stats-section-title">⚥ Genere</div>
-        ${statRow('👨 Uomini', s.maschi)}
-        ${statRow('👩 Donne', s.femmine)}
+        ${statRow('Totale', {tot,m:s.attivi.m+s.non_attivi.m,f:s.attivi.f+s.non_attivi.f})}
         <div class="stats-section-title">📄 Tipo Contratto</div>
         ${statRow('Tempo indeterminato', s.indet, 'var(--success)')}
         ${statRow('Tempo determinato', s.det)}
@@ -2744,8 +2762,8 @@ App.renderStats = function(){
     </div>`;
   }
 
-  const allAz = [...AZIENDE, 'Altre/Non specificata'];
-  const cardsHtml = allAz.map(az => azCard(az)).join('');
+  const allAz = [...AZIENDE, 'Altra'];
+  const cardsHtml = allAz.map((az,i) => azCard(az,i)).join('');
 
   const formHtml = Object.entries(formByTipo).sort((a,b)=>b[1]-a[1]).map(([tipo,n]) => {
     const pct = totalForm ? Math.round(n/totalForm*100) : 0;
@@ -2754,17 +2772,108 @@ App.renderStats = function(){
       <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:var(--accent2)"></div></div>
       <span class="bar-count">${n}</span>
     </div>`;
-  }).join('') || '<p style="color:var(--text3);font-size:13px">Nessun corso registrato per questo anno.</p>';
+  }).join('') || '<p style="color:var(--text3);font-size:13px">Nessun corso per questo anno.</p>';
 
   document.getElementById('stats-content').innerHTML = `
-    <div style="margin-bottom:20px">
-      <div class="stats-year-title">Anno ${year}</div>
-    </div>
+    <p style="font-size:12px;color:var(--text3);margin-bottom:14px">
+      I contatori 👨/👩 indicano la suddivisione uomini/donne per ogni voce.
+    </p>
     <div class="stats-az-grid">${cardsHtml}</div>
-    <div class="panel" style="margin-top:20px">
+    <div class="panel" style="margin-top:16px">
       <div class="panel-header">🎓 Formazione per Tipo — Anno ${year} (${totalForm} corsi totali)</div>
       <div class="panel-body">${formHtml}</div>
     </div>`;
+
+  // Store stats for print
+  App._lastStats = {year, stats, formByTipo, totalForm, allAz};
+};
+
+App.printSingleStats = function(az, year){
+  App._printStatsFor([az], year);
+};
+
+App.printStats = function(){
+  const year = parseInt(document.getElementById('stats-year')?.value || new Date().getFullYear());
+  if(!App._lastStats) return;
+  App._printStatsFor(App._lastStats.allAz, year);
+};
+
+App._printStatsFor = function(aziende, year){
+  if(!App._lastStats) return;
+  const {stats, formByTipo, totalForm} = App._lastStats;
+  const oggi = new Date().toLocaleDateString('it-IT');
+
+  function mfLine(label, obj, color=''){
+    const num = typeof obj==='object' ? obj.tot : obj;
+    const mf = typeof obj==='object' ? `<small style="color:#666"> (👨${obj.m||0} 👩${obj.f||0})</small>` : '';
+    return `<div class="sr"><span>${label}</span><span${color?` style="color:${color};font-weight:700"`:' style="font-weight:700"'}>${num}${mf}</span></div>`;
+  }
+
+  const cards = aziende.map(az => {
+    const s = stats[az];
+    if(!s) return '';
+    const tot = s.attivi.tot + s.non_attivi.tot;
+    if(!tot) return '';
+    const shortAz = az.replace(' Soc. Coop.','').replace(' Scarl','').replace(' Srl','');
+    return `<div class="card">
+      <div class="card-hdr">${shortAz}</div>
+      <div class="card-body">
+        <div class="sec">👤 Stato</div>
+        ${mfLine('Attivi',s.attivi,'#16a34a')}
+        ${mfLine('Non in forza',s.non_attivi,'#dc2626')}
+        ${mfLine('Totale',{tot,m:s.attivi.m+s.non_attivi.m,f:s.attivi.f+s.non_attivi.f})}
+        <div class="sec">📄 Contratto</div>
+        ${mfLine('Tempo indeterminato',s.indet,'#16a34a')}
+        ${mfLine('Tempo determinato',s.det)}
+        <div class="sec">⏱ Orario</div>
+        ${mfLine('Full Time',s.fulltime)}
+        ${mfLine('Part Time',s.parttime)}
+        <div class="sec">🌍 Cittadinanza</div>
+        ${mfLine('Comunitari',s.eu)}
+        ${mfLine('Extracomunitari',s.extraeu,'#d97706')}
+      </div>
+    </div>`;
+  }).join('');
+
+  const formRows = Object.entries(formByTipo).sort((a,b)=>b[1]-a[1]).map(([t,n])=>
+    `<div class="sr"><span>${t}</span><span style="font-weight:700">${n}</span></div>`).join('');
+
+  const html=`<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"/>
+  <title>Statistiche ${year}${aziende.length===1?' — '+aziende[0]:''}</title>
+  <style>
+    @page{size:A4 portrait;margin:10mm;}
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:Arial,sans-serif;font-size:9px;color:#111;}
+    .header{border-bottom:2px solid #1F4E79;padding-bottom:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-end;}
+    .header h1{font-size:14px;font-weight:800;color:#1F4E79;}
+    .grid{display:grid;grid-template-columns:repeat(${aziende.length===1?'1':'3'},1fr);gap:8px;margin-bottom:10px;}
+    .card{border:1px solid #d1d9e6;border-radius:6px;overflow:hidden;break-inside:avoid;}
+    .card-hdr{background:#1F4E79;color:#fff;padding:5px 8px;font-size:9px;font-weight:700;}
+    .card-body{padding:5px 8px;}
+    .sec{font-size:8px;font-weight:700;color:#2E75B6;text-transform:uppercase;margin:5px 0 2px;padding-bottom:2px;border-bottom:1px solid #e5e7eb;}
+    .sr{display:flex;justify-content:space-between;padding:2px 0;font-size:8px;border-bottom:1px solid #f8f8f8;}
+    .form-section{border:1px solid #d1d9e6;border-radius:6px;overflow:hidden;margin-top:8px;}
+    .form-hdr{background:#0891b2;color:#fff;padding:5px 8px;font-size:9px;font-weight:700;}
+    .form-body{padding:6px 8px;}
+    .footer{margin-top:6px;font-size:7px;color:#999;text-align:right;}
+    @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .card{break-inside:avoid;}}
+  </style></head><body>
+  <div class="header">
+    <h1>📊 Statistiche ${aziende.length===1?aziende[0]:'Tutte le Aziende'} — Anno ${year}</h1>
+    <span style="font-size:8px;color:#555">${oggi}</span>
+  </div>
+  <div class="grid">${cards}</div>
+  ${totalForm>0?`<div class="form-section">
+    <div class="form-hdr">🎓 Formazione per Tipo — ${totalForm} corsi totali</div>
+    <div class="form-body">${formRows}</div>
+  </div>`:''}
+  <div class="footer">Gestionale Dipendenti — ${oggi}</div>
+  <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
+  </body></html>`;
+  const w=window.open('','_blank');
+  if(!w){toast('Abilita i popup','error');return;}
+  w.document.write(html);w.document.close();
 };
 
 App.printStats = function(){

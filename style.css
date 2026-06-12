@@ -988,3 +988,28 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
 .stat-row:last-child { border-bottom: none; }
 .stat-row-label { color: var(--text2); }
 .stat-row-val   { font-weight: 700; font-family: var(--font-mono); color: var(--text); }
+
+/* ── STATS M/F BADGE ─────────────────────────────────────── */
+.mf-badge {
+  font-size: 10px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  margin-right: 6px;
+}
+.stat-row-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.stats-print-btn {
+  float: right;
+  background: rgba(255,255,255,.15);
+  border: 1px solid rgba(255,255,255,.3);
+  border-radius: 5px;
+  color: #fff;
+  padding: 2px 7px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background .15s;
+}
+.stats-print-btn:hover { background: rgba(255,255,255,.3); }
