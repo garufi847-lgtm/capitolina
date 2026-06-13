@@ -6,14 +6,17 @@ const DEFAULT_USERS = [
   { username:'hr',     password:'hr2024',     role:'editor', nome:'Ufficio HR' },
   { username:'viewer', password:'viewer2024', role:'viewer', nome:'Visualizzatore' },
 ];
-const Auth = {
-  getUsers(){ const s=localStorage.getItem('gest_users'); return s?JSON.parse(s):DEFAULT_USERS; },
-  saveUsers(u){ localStorage.setItem('gest_users',JSON.stringify(u)); },
-  login(u,p){ const x=this.getUsers().find(x=>x.username===u&&x.password===p); if(x){sessionStorage.setItem('gest_sess',JSON.stringify(x));return x;} return null; },
-  logout(){ sessionStorage.removeItem('gest_sess'); },
-  current(){ const s=sessionStorage.getItem('gest_sess'); return s?JSON.parse(s):null; },
-  canEdit(){ const u=this.current(); return u&&(u.role==='admin'||u.role==='editor'); },
-  isAdmin(){ const u=this.current(); return u&&u.role==='admin'; }
+const ALL_PERMISSIONS={view:{label:'Visualizza record',desc:'Vedere i dati nelle tabelle'},add:{label:'Aggiungi record',desc:'Inserire nuovi record'},edit:{label:'Modifica record',desc:'Modificare record esistenti'},delete:{label:'Elimina record',desc:'Cancellare record'},import:{label:'Importa dati',desc:'Caricare file Excel o ZIP'},export:{label:'Esporta dati',desc:'Scaricare Excel e backup'},print:{label:'Stampa',desc:'Stampare tabelle e report'},allegati:{label:'Gestione allegati PDF',desc:'Caricare e scaricare PDF'},quick_search:{label:'Ricerche rapide',desc:'Ricerche predefinite'},adv_search:{label:'Ricerca avanzata',desc:'Filtri avanzati'},stats:{label:'Statistiche per anno',desc:'Vedere le statistiche'},clear_table:{label:'Svuota tabella',desc:'Eliminare tutti i record'},manage_users:{label:'Gestione utenti',desc:'Solo admin'}};
+const ROLE_DEFAULTS={admin:Object.keys(ALL_PERMISSIONS),editor:['view','add','edit','import','export','print','allegati','quick_search','adv_search','stats'],viewer:['view','quick_search','adv_search','stats','print']};
+const Auth={
+  getUsers(){const s=localStorage.getItem('gest_users');const users=s?JSON.parse(s):DEFAULT_USERS;return users.map(u=>{if(!u.permissions)u.permissions=ROLE_DEFAULTS[u.role]||ROLE_DEFAULTS.viewer;return u;});},
+  saveUsers(u){localStorage.setItem('gest_users',JSON.stringify(u));},
+  login(u,p){const x=this.getUsers().find(x=>x.username===u&&x.password===p);if(x){sessionStorage.setItem('gest_sess',JSON.stringify(x));return x;}return null;},
+  logout(){sessionStorage.removeItem('gest_sess');},
+  current(){const s=sessionStorage.getItem('gest_sess');return s?JSON.parse(s):null;},
+  isAdmin(){const u=this.current();return u&&u.role==='admin';},
+  can(perm){const u=this.current();if(!u)return false;if(u.role==='admin')return true;return(u.permissions||ROLE_DEFAULTS[u.role]||[]).includes(perm);},
+  canEdit(){return this.can('edit')||this.can('add');},
 };
 
 // ─── STORE ────────────────────────────────────────────────────────────────────
@@ -630,7 +633,7 @@ const App = {
       ba.onclick=()=>this.openAddUser(); this.renderUsers();
     } else {
       const db=document.getElementById('dash-btns'); if(db)db.remove();
-      this.table=v; sw.style.display=''; ba.style.display=Auth.canEdit()?'':'none';
+      this.table=v; sw.style.display=''; ba.style.display=Auth.can('add')?'':'none';
       ba.textContent='+ Aggiungi'; ba.className='btn btn-primary';
       ba.onclick=()=>this.openAdd(); this.renderTable(v);
     }
@@ -663,9 +666,9 @@ const App = {
       btnWrap.id = 'dash-btns';
       btnWrap.style.cssText = 'display:flex;gap:8px;margin-left:auto';
       btnWrap.innerHTML =
-        '<button class="btn btn-ghost" style="font-size:13px" onclick="App.openStats()">📊 Statistiche per Anno</button>' +
+        (Auth.can('stats')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.openStats()">📊 Statistiche per Anno</button>':'')+
         '<button class="btn btn-ghost" style="font-size:13px" onclick="App.exportGestionale()">↓ Esporta Gestionale</button>' +
-        '<button class="btn btn-primary" style="font-size:13px" onclick="App.importXLSX(\"dipendenti\")">📂 Importa Gestionale</button>';
+        '<button class="btn btn-primary" style="font-size:13px" onclick="App.importGestionale()">📂 Importa Gestionale</button>';
       topbarEl.appendChild(btnWrap);
     }
 
@@ -857,7 +860,7 @@ const App = {
 
     // Aggiungi sezioni allegati - disponibili sia in modifica che in aggiunta
     const allegSlots = ALLEGATI_SLOTS[t] || [];
-    if(allegSlots.length){
+    if(allegSlots.length && Auth.can('allegati')){
       // Per nuovi record genera un ID temporaneo persistente nella sessione
       let recordId;
       if(idx !== null){
@@ -954,51 +957,75 @@ const App = {
 
   // ── UTENTI ─────────────────────────────────────────────────────────────────
   renderUsers(){
-    document.getElementById('content').innerHTML=`
-      <div class="table-wrap"><div class="table-scroll"><table>
-        <thead><tr><th>Username</th><th>Nome</th><th>Ruolo</th><th>Azioni</th></tr></thead>
-        <tbody>${Auth.getUsers().map((u,i)=>`<tr>
-          <td>${esc(u.username)}</td><td>${esc(u.nome)}</td>
-          <td><span class="pill ${u.role==='admin'?'pill-red':u.role==='editor'?'pill-blue':'pill-gray'}">${u.role}</span></td>
-          <td><div class="td-actions">
-            <button class="icon-btn" onclick="App.openEditUser(${i})">✎</button>
-            <button class="icon-btn danger" onclick="App.confirmDeleteUser(${i})">✕</button>
-          </div></td></tr>`).join('')}
-        </tbody>
-      </table></div></div>`;
+    document.getElementById('content').innerHTML=
+      '<div class="table-wrap"><div class="table-scroll"><table>'+
+      '<thead><tr><th>Username</th><th>Nome</th><th>Ruolo</th><th>Permessi attivi</th><th>Azioni</th></tr></thead><tbody>'+
+      Auth.getUsers().map((u,i)=>{
+        const perms=u.permissions||ROLE_DEFAULTS[u.role]||[];
+        const labels=perms.map(p=>ALL_PERMISSIONS[p]?.label||p).join(' · ');
+        return '<tr>'+
+          '<td>'+esc(u.username)+'</td><td>'+esc(u.nome)+'</td>'+
+          '<td><span class="pill '+(u.role==='admin'?'pill-red':u.role==='editor'?'pill-blue':'pill-gray')+'">'+u.role+'</span></td>'+
+          '<td style="font-size:11px;color:var(--text3);white-space:normal;line-height:1.5;max-width:250px">'+esc(labels)+'</td>'+
+          '<td><div class="td-actions">'+
+          '<button class="icon-btn" onclick="App.openEditUser('+i+')">✎</button>'+
+          '<button class="icon-btn danger" onclick="App.confirmDeleteUser('+i+')">✕</button>'+
+          '</div></td></tr>';
+      }).join('')+
+      '</tbody></table></div></div>';
   },
   openAddUser(){ this._openUserForm(null,null); },
   openEditUser(i){ this._openUserForm(Auth.getUsers()[i],i); },
   _openUserForm(u,idx){
     document.getElementById('modal-title').textContent=u?'Modifica Utente':'Nuovo Utente';
-    document.getElementById('modal-body').innerHTML=`
-      <div class="form-grid" style="padding:0">
-        <div class="form-group"><label class="field-label">Username</label><input type="text" id="u_un" value="${esc(u?.username||'')}"/></div>
-        <div class="form-group"><label class="field-label">Nome</label><input type="text" id="u_no" value="${esc(u?.nome||'')}"/></div>
-        <div class="form-group"><label class="field-label">Password</label><input type="password" id="u_pw" placeholder="${u?'Lascia vuoto per non cambiare':'Password'}"/></div>
-        <div class="form-group"><label class="field-label">Ruolo</label>
-          <select id="u_ro">
-            <option value="viewer" ${u?.role==='viewer'?'selected':''}>viewer – solo lettura</option>
-            <option value="editor" ${u?.role==='editor'?'selected':''}>editor – modifica</option>
-            <option value="admin"  ${u?.role==='admin' ?'selected':''}>admin – completo</option>
-          </select></div></div>`;
+    const curPerms=u?.permissions||ROLE_DEFAULTS[u?.role||'viewer']||[];
+    const permsHtml=Object.entries(ALL_PERMISSIONS).map(([key,def])=>
+      '<label class="perm-item">'+
+      '<input type="checkbox" name="perm_chk" value="'+key+'" '+(curPerms.includes(key)?'checked':'')+'/> '+
+      '<span class="perm-label"><strong>'+esc(def.label)+'</strong> — <small>'+esc(def.desc)+'</small></span></label>'
+    ).join('');
+    document.getElementById('modal-body').innerHTML=
+      '<div class="form-grid" style="padding:0;margin-bottom:16px">'+
+      '<div class="form-group"><label class="field-label">Username</label><input type="text" id="u_un" value="'+esc(u?.username||'')+'"/></div>'+
+      '<div class="form-group"><label class="field-label">Nome</label><input type="text" id="u_no" value="'+esc(u?.nome||'')+'"/></div>'+
+      '<div class="form-group"><label class="field-label">Password</label><input type="password" id="u_pw" placeholder="'+(u?'Lascia vuoto per non cambiare':'Nuova password')+'"/></div>'+
+      '<div class="form-group"><label class="field-label">Ruolo base</label>'+
+      '<select id="u_ro" onchange="App.resetPermsToRole()">'+
+      '<option value="viewer"'+(u?.role==='viewer'?' selected':'')+'>viewer – solo lettura</option>'+
+      '<option value="editor"'+(u?.role==='editor'?' selected':'')+'>editor – modifica</option>'+
+      '<option value="admin"'+(u?.role==='admin'?' selected':'')+'>admin – completo</option>'+
+      '</select></div></div>'+
+      '<div class="form-section">'+
+      '<div class="form-section-title" style="display:flex;justify-content:space-between;align-items:center">'+
+      '🔐 Permessi personalizzati'+
+      '<button type="button" class="btn btn-ghost" style="font-size:11px;padding:3px 10px" onclick="App.resetPermsToRole()">↺ Ripristina dal ruolo</button></div>'+
+      '<div class="perm-grid" id="perm-grid">'+permsHtml+'</div></div>';
     document.getElementById('modal-footer').innerHTML=
-      `<button class="btn btn-ghost" onclick="App.closeModal()">Annulla</button>
-       <button class="btn btn-primary" id="btn-save-user">Salva</button>`;
+      '<button class="btn btn-ghost" onclick="App.closeModal()">Annulla</button>'+
+      '<button class="btn btn-primary" id="btn-save-user">Salva</button>';
     document.getElementById('btn-save-user').addEventListener('click',()=>{
       const un=document.getElementById('u_un').value.trim();
       const no=document.getElementById('u_no').value.trim();
       const pw=document.getElementById('u_pw').value;
       const ro=document.getElementById('u_ro').value;
       if(!un||!no){toast('Compila tutti i campi','error');return;}
+      const perms=this.getSelectedPerms();
       const users=Auth.getUsers();
-      if(idx===null){if(!pw){toast('Inserisci una password','error');return;}users.push({username:un,nome:no,password:pw,role:ro});}
-      else{users[idx]={username:un,nome:no,role:ro,password:pw||users[idx].password};}
+      if(idx===null){if(!pw){toast('Inserisci una password','error');return;}users.push({username:un,nome:no,password:pw,role:ro,permissions:perms});}
+      else{users[idx]={username:un,nome:no,role:ro,password:pw||users[idx].password,permissions:perms};}
       Auth.saveUsers(users);toast('Utente salvato');this.closeModal();this.renderUsers();
     });
     this.openModal();
   },
-  confirmDeleteUser(i){
+  resetPermsToRole(){
+    const role=document.getElementById('u_ro')?.value||'viewer';
+    const defs=ROLE_DEFAULTS[role]||[];
+    document.querySelectorAll('#perm-grid input[type=checkbox]').forEach(cb=>{cb.checked=defs.includes(cb.value);});
+  },
+  getSelectedPerms(){
+    return[...document.querySelectorAll('#perm-grid input[type=checkbox]:checked')].map(cb=>cb.value);
+  },
+    confirmDeleteUser(i){
     const u=Auth.getUsers()[i];
     document.getElementById('confirm-title').textContent='Elimina Utente';
     document.getElementById('confirm-msg').textContent=`Eliminare l'utente "${u.username}"?`;
@@ -1410,7 +1437,26 @@ const App = {
   },
 
   // ── ESPORTA GESTIONALE COMPLETO ─────────────────────────────────────────────
-  exportGestionale(){
+  async exportGestionale(){
+    const base = typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : '';
+
+    if(base){
+      // NAS: scarica ZIP con dati + PDF allegati
+      try{
+        toast('Preparazione backup in corso...');
+        const url = base + '/backup/export';
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'gestionale_backup_'+new Date().toISOString().slice(0,10)+'.zip';
+        a.click();
+        toast('Backup ZIP scaricato (dati + allegati PDF) ✓');
+      }catch(e){
+        toast('Errore backup NAS: '+e.message,'error');
+      }
+      return;
+    }
+
+    // Modalità locale: esporta solo Excel (no PDF in localStorage)
     const tables = [
       { key:'dipendenti',   label:'Anagrafica Dipendente' },
       { key:'contratti',    label:'Contratti di Lavoro' },
@@ -1418,27 +1464,67 @@ const App = {
       { key:'sorveglianza', label:'Sorveglianza Sanitaria' },
       { key:'aziende',      label:'Anagrafica Azienda' },
     ];
-
     const wb = XLSX.utils.book_new();
-
     for(const t of tables){
       const rows = Store.getRows(t.key);
       const cols = Store.getCols(t.key).filter(c => c && c !== '_id');
       const data = [cols];
       rows.forEach(r => data.push(cols.map(c => r[c]||'')));
       const ws = XLSX.utils.aoa_to_sheet(data);
-      // Larghezze colonne
       ws['!cols'] = cols.map(c => ({ wch: Math.max(c.length, 12) }));
       ws['!freeze'] = { xSplit:0, ySplit:1 };
       XLSX.utils.book_append_sheet(wb, ws, t.label.slice(0,31));
     }
-
     const today = new Date().toISOString().slice(0,10);
     XLSX.writeFile(wb, `Gestionale_Dipendenti_backup_${today}.xlsx`);
     toast('Backup Excel scaricato ✓');
   },
 
-  // ── IMPORT XLSX ──────────────────────────────────────────────────────────────
+  // ── IMPORTA GESTIONALE (ZIP con PDF o XLSX) ─────────────────────────────────
+  importGestionale(){
+    const base = typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : '';
+
+    if(base){
+      // NAS: accetta ZIP (dati + PDF) o XLSX (solo dati)
+      const input = document.createElement('input');
+      input.type  = 'file';
+      input.accept = '.zip,.xlsx,.xls';
+      input.onchange = async(e) => {
+        const file = e.target.files[0]; if(!file) return;
+        const isZip = file.name.toLowerCase().endsWith('.zip');
+
+        if(isZip){
+          // Carica ZIP sul NAS → ripristina tutto
+          toast('Caricamento backup ZIP in corso...');
+          try{
+            const fd = new FormData();
+            fd.append('backup', file);
+            const r = await fetch(base+'/backup/import', { method:'POST', body:fd });
+            if(!r.ok) throw new Error('HTTP '+r.status);
+            const result = await r.json();
+            toast(result.message || 'Backup ripristinato ✓');
+            // Ricarica tutti i dati dal NAS
+            await Store.load();
+            ['dipendenti','contratti','formazione','sorveglianza','aziende'].forEach(t=>{
+              const b=document.getElementById('badge-'+t); if(b) b.textContent=Store.getRows(t).length;
+            });
+            this.renderDash();
+          }catch(err){
+            toast('Errore ripristino: '+err.message,'error');
+          }
+        } else {
+          // XLSX: importa solo i dati (come prima)
+          this.importXLSX('dipendenti');
+        }
+      };
+      input.click();
+    } else {
+      // Modalità locale: solo XLSX
+      this.importXLSX('dipendenti');
+    }
+  },
+
+    // ── IMPORT XLSX ──────────────────────────────────────────────────────────────
   // Mapping: foglio xlsx → chiave tabella interna
   _sheetMap(){
     return {
@@ -2137,8 +2223,9 @@ App.renderTable = function(t){
     const oi=all.indexOf(row);
     const tds=cols.map(c=>{const v=row[c]??'';return meta.status===c?'<td>'+pill(v)+'</td>':`<td title="${esc(v)}">${esc(v)}</td>`;}).join('');
     const actView=`<button class="icon-btn view" title="Visualizza" onclick="App.openView('${t}',${oi})">👁</button>`;
-    const actEdit=canEdit?`<button class="icon-btn" title="Modifica" onclick="App.openEdit('${t}',${oi})">✎</button><button class="icon-btn danger" title="Elimina" onclick="App.confirmDelete('${t}',${oi})">✕</button>`:'';
-    return`<tr>${tds}<td><div class="td-actions">${actView}${actEdit}</div></td></tr>`;
+    const actMod=Auth.can('edit')?`<button class="icon-btn" title="Modifica" onclick="App.openEdit('${t}',${oi})">✎</button>`:'';
+    const actDel=Auth.can('delete')?`<button class="icon-btn danger" title="Elimina" onclick="App.confirmDelete('${t}',${oi})">✕</button>`:'';
+    return`<tr>${tds}<td><div class="td-actions">${actView}${actMod}${actDel}</div></td></tr>`;
   }).join('')||'<tr><td colspan="99" style="text-align:center;color:var(--text3);padding:36px">Nessun risultato</td></tr>';
 
   let pgs='';const mB=7,sP=Math.max(1,Math.min(this.page-3,tp-mB+1)),eP=Math.min(tp,sP+mB-1);
@@ -2150,12 +2237,12 @@ App.renderTable = function(t){
         <span style="font-size:14px;color:var(--text2);font-weight:600">${meta.label}${advBadge}</span>
         ${resetBtn}
         <span class="record-count">${this.filter||advCount?tot+' filtrati / ':''}${all.length} totali</span>
-        <button class="btn btn-ghost" style="font-size:13px;background:var(--accent);color:#fff;border-color:var(--accent)" onclick="App.openQuickSearches('${t}')">⚡ Ricerche Rapide</button>
-        <button class="btn btn-ghost" style="font-size:13px;border-color:var(--accent);color:var(--accent)" onclick="App.openAdvSearch('${t}')">🔍 Ricerca Avanzata</button>
-        <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportXLSX('${t}')">↓ Excel</button>
-        <button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>
-        <button class="btn btn-ghost" style="font-size:13px" onclick="App.printTable('${t}')">🖨 Stampa</button>
-        <button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.clearTable('${t}')">🗑 Svuota</button>
+        ${Auth.can('quick_search')?`<button class="btn btn-ghost" style="font-size:13px;background:var(--accent);color:#fff;border-color:var(--accent)" onclick="App.openQuickSearches('${t}')">⚡ Ricerche Rapide</button>`:''}
+        ${Auth.can('adv_search')?`<button class="btn btn-ghost" style="font-size:13px;border-color:var(--accent);color:var(--accent)" onclick="App.openAdvSearch('${t}')">🔍 Ricerca Avanzata</button>`:''}
+        ${Auth.can('export')?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.exportXLSX('${t}')">↓ Excel</button>`:''}
+        ${Auth.can('import')?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>`:''}
+        ${Auth.can('print')?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.printTable('${t}')">🖨 Stampa</button>`:''}
+        ${Auth.can('clear_table')?`<button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.clearTable('${t}')">🗑 Svuota</button>`:''}
       </div>
       <div class="table-scroll"><table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>
       <div class="pagination">
