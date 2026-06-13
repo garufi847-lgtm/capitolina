@@ -1442,17 +1442,25 @@ const App = {
   // Mapping: foglio xlsx → chiave tabella interna
   _sheetMap(){
     return {
+      // Nomi esatti del file esportato
       'Anagrafica Dipendente':  'dipendenti',
       'Contratti di Lavoro':    'contratti',
       'Formazione':             'formazione',
       'Sorveglianza Sanitaria': 'sorveglianza',
       'Anagrafica Azienda':     'aziende',
+      // Varianti nomi
+      'Anagrafica Aziende':     'aziende',
+      'Scheda Anagrafica Dipendente': 'dipendenti',
+      'Gestione Contratti di Lavoro': 'contratti',
+      'Dipendenti':             'dipendenti',
+      'Contratti':              'contratti',
+      'Aziende':                'aziende',
     };
   },
 
   importXLSX(targetTable){
     const input=document.createElement('input');
-    input.type='file'; input.accept='.xlsx,.xls';
+    input.type='file'; input.accept='.xlsx,.xls,.XLS,.XLSX';
     input.onchange=async(e)=>{
       const file=e.target.files[0]; if(!file)return;
       try{
@@ -1461,7 +1469,8 @@ const App = {
           return;
         }
         const buf=await file.arrayBuffer();
-        const wb=XLSX.read(buf,{type:'array',raw:false,cellDates:false,cellText:true});
+        // Supporta sia .xlsx che .xls
+        const wb=XLSX.read(new Uint8Array(buf),{type:'array',raw:false,cellDates:false,cellText:true,WTF:false});
         const sheetMap=this._sheetMap();
 
         // Detect if this is the full multi-sheet gestionale or a single sheet
@@ -1488,6 +1497,12 @@ const App = {
               total+=rows.length;
             }
             toast(`Importati ${total} record su ${matchedSheets.length} tabelle ✓`);
+            // Aggiorna tutti i badge
+            ['dipendenti','contratti','formazione','sorveglianza','aziende'].forEach(t=>{
+              const b=document.getElementById('badge-'+t);
+              if(b) b.textContent=Store.getRows(t).length;
+            });
+            if(this.view==='dashboard') this.renderDash();
           });
         } else {
           // Single sheet: import into target table
@@ -2718,19 +2733,18 @@ App.renderStats = function(){
   const totalForm = Object.values(formByTipo).reduce((a,b)=>a+b,0);
 
   // ── Render helpers ──────────────────────────────────────
-  function mfBadge(obj){
-    if(!obj.m && !obj.f) return '';
-    return `<span class="mf-badge">👨${obj.m||0} · 👩${obj.f||0}</span>`;
-  }
   function statRow(label, obj, color=''){
-    const tot = obj.tot||obj||0;
     const num = typeof obj === 'object' ? obj.tot : obj;
-    return `<div class="stat-row">
-      <span class="stat-row-label">${label}</span>
-      <span class="stat-row-right">
-        ${typeof obj==='object'?mfBadge(obj):''}
+    const hasMF = typeof obj === 'object' && (obj.m || obj.f);
+    return `<div class="stat-row-block">
+      <div class="stat-row">
+        <span class="stat-row-label">${label}</span>
         <span class="stat-row-val"${color?` style="color:${color}"`:''}>${num}</span>
-      </span>
+      </div>
+      ${hasMF ? `<div class="stat-mf-row">
+        <span class="mf-item male">👨 Uomini: <strong>${obj.m||0}</strong></span>
+        <span class="mf-item female">👩 Donne: <strong>${obj.f||0}</strong></span>
+      </div>` : ''}
     </div>`;
   }
 
