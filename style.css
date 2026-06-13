@@ -995,27 +995,32 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
 }
 .stat-mf-row {
   display: flex;
-  gap: 10px;
-  padding: 3px 6px 5px;
-  background: var(--surface2);
-  border-radius: 0 0 6px 6px;
+  gap: 12px;
+  padding: 6px 8px 8px;
+  background: #f0f4ff;
+  border-radius: 0 0 8px 8px;
   margin-top: -2px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  border: 1px solid #dbeafe;
+  border-top: none;
 }
 .mf-item {
-  font-size: 12px;
+  font-size: 15px;
   color: var(--text2);
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  font-weight: 500;
 }
 .mf-item strong {
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 800;
   font-family: var(--font-mono);
 }
-.mf-item.male  strong { color: #2563eb; }
-.mf-item.female strong { color: #db2777; }
+.mf-item.male  { color: #1d4ed8; }
+.mf-item.male  strong { color: #1d4ed8; }
+.mf-item.female { color: #be185d; }
+.mf-item.female strong { color: #be185d; }
 .stats-print-btn {
   float: right;
   background: rgba(255,255,255,.15);
