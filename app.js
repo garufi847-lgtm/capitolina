@@ -2719,7 +2719,7 @@ App.openStats = function(){
      <button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
 
   this.openModal();
-  this.renderStats();
+  setTimeout(()=>this.renderStats(), 60);
 
   // Mouse wheel on year selector
   document.getElementById('stats-year').addEventListener('wheel', function(e){
@@ -2888,8 +2888,8 @@ App.renderStats = function(){
       '</div></div>'
     ).join('');
 
-  // Draw charts after DOM update
-  requestAnimationFrame(()=>App._drawStatsCharts(year, stats, allAz, formByTipo));
+  // Draw charts after DOM update (timeout per garantire che il modal sia visibile e dimensionato)
+  setTimeout(()=>App._drawStatsCharts(year, stats, allAz, formByTipo), 80);
 
   // Store stats for print
   App._lastStats = {year, stats, formByTipo, totalForm, allAz};
@@ -2900,9 +2900,13 @@ App._drawStatsCharts = function(year, stats, allAz, formByTipo){
     const canvas = document.getElementById(canvasId);
     if(!canvas) return;
     const ctx = canvas.getContext('2d');
-    const W = canvas.offsetWidth || 400;
-    const H = canvas.height || 200;
+    const parentW = canvas.parentElement ? canvas.parentElement.clientWidth : 0;
+    const W = Math.max(canvas.offsetWidth, parentW, 380);
+    const H = parseInt(canvas.getAttribute('height')) || 200;
+    canvas.style.width = W+'px';
+    canvas.style.height = H+'px';
     canvas.width = W;
+    canvas.height = H;
     const barW = Math.max(8, (W - 60) / (labels.length * datasets.length + labels.length));
     const groupW = barW * datasets.length + 4;
     const maxVal = Math.max(1, ...datasets.flatMap(d=>d.data));
@@ -3025,6 +3029,7 @@ App._printStatsFor = function(aziende, year){
   if(!App._lastStats) return;
   const {stats, formByTipo, totalForm} = App._lastStats;
   const oggi = new Date().toLocaleDateString('it-IT');
+  const isSingle = aziende.length === 1;
 
   function mfLine(label, obj, color=''){
     const num = typeof obj==='object' ? obj.tot : obj;
@@ -3061,15 +3066,54 @@ App._printStatsFor = function(aziende, year){
   const formRows = Object.entries(formByTipo).sort((a,b)=>b[1]-a[1]).map(([t,n])=>
     `<div class="sr"><span>${t}</span><span style="font-weight:700">${n}</span></div>`).join('');
 
+  // ── Estrai i grafici già disegnati come immagini PNG ─────────────────────────
+  let chartsHtml = '';
+  try{
+    if(isSingle){
+      const key = aziende[0].replace(/[^a-zA-Z0-9]/g,'_');
+      const c1 = document.getElementById('chart-'+key+'-stato');
+      const c2 = document.getElementById('chart-'+key+'-dettagli');
+      console.log('Canvas trovati:', {c1: !!c1, c2: !!c2, w1: c1?.width, w2: c2?.width});
+      const img1 = (c1 && c1.width>0) ? c1.toDataURL('image/png') : '';
+      const img2 = (c2 && c2.width>0) ? c2.toDataURL('image/png') : '';
+      if(img1 || img2){
+        chartsHtml = `<div class="chart-section">
+          <div class="chart-hdr">📊 Grafici — ${aziende[0]}</div>
+          <div class="chart-body">
+            ${img1?`<img src="${img1}" class="chart-img"/>`:''}
+            ${img2?`<img src="${img2}" class="chart-img"/>`:''}
+          </div>
+        </div>`;
+      } else {
+        chartsHtml = '<div class="chart-warn">⚠ Grafici non disponibili: apri prima la finestra Statistiche e attendi il caricamento, poi stampa.</div>';
+      }
+    } else {
+      const cOverall = document.getElementById('chart-overall');
+      console.log('Canvas overall trovato:', !!cOverall, 'width:', cOverall?.width);
+      const imgOverall = (cOverall && cOverall.width>0) ? cOverall.toDataURL('image/png') : '';
+      if(imgOverall){
+        chartsHtml = `<div class="chart-section">
+          <div class="chart-hdr">📊 Grafico Complessivo — Tutte le Aziende</div>
+          <div class="chart-body"><img src="${imgOverall}" class="chart-img-full"/></div>
+        </div>`;
+      } else {
+        chartsHtml = '<div class="chart-warn">⚠ Grafico non disponibile: apri prima la finestra Statistiche e attendi il caricamento, poi stampa.</div>';
+      }
+    }
+  }catch(e){
+    console.warn('Impossibile estrarre i grafici:', e.message);
+    chartsHtml = '<div class="chart-warn">⚠ Errore nel caricamento dei grafici: '+e.message+'</div>';
+  }
+
   const html=`<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"/>
-  <title>Statistiche ${year}${aziende.length===1?' — '+aziende[0]:''}</title>
+  <title>Statistiche ${year}${isSingle?' — '+aziende[0]:''}</title>
   <style>
     @page{size:A4 portrait;margin:10mm;}
     *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:Arial,sans-serif;font-size:9px;color:#111;}
     .header{border-bottom:2px solid #1F4E79;padding-bottom:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-end;}
     .header h1{font-size:14px;font-weight:800;color:#1F4E79;}
-    .grid{display:grid;grid-template-columns:repeat(${aziende.length===1?'1':'3'},1fr);gap:8px;margin-bottom:10px;}
+    .grid{display:grid;grid-template-columns:repeat(${isSingle?'1':'3'},1fr);gap:8px;margin-bottom:10px;}
     .card{border:1px solid #d1d9e6;border-radius:6px;overflow:hidden;break-inside:avoid;}
     .card-hdr{background:#1F4E79;color:#fff;padding:5px 8px;font-size:9px;font-weight:700;}
     .card-body{padding:5px 8px;}
@@ -3078,25 +3122,48 @@ App._printStatsFor = function(aziende, year){
     .form-section{border:1px solid #d1d9e6;border-radius:6px;overflow:hidden;margin-top:8px;}
     .form-hdr{background:#0891b2;color:#fff;padding:5px 8px;font-size:9px;font-weight:700;}
     .form-body{padding:6px 8px;}
+    .chart-section{border:1px solid #d1d9e6;border-radius:6px;overflow:hidden;margin-top:10px;break-inside:avoid;}
+    .chart-hdr{background:#475569;color:#fff;padding:5px 8px;font-size:9px;font-weight:700;}
+    .chart-body{padding:8px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;}
+    .chart-img{max-width:48%;height:auto;border:1px solid #e5e7eb;border-radius:4px;}
+    .chart-img-full{max-width:100%;height:auto;border:1px solid #e5e7eb;border-radius:4px;}
+    .chart-warn{background:#fef9c3;border:1px solid #eab308;border-radius:6px;padding:8px 12px;font-size:9px;color:#92400e;margin-top:8px;}
     .footer{margin-top:6px;font-size:7px;color:#999;text-align:right;}
     @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    .card{break-inside:avoid;}}
+    .card,.chart-section{break-inside:avoid;}}
   </style></head><body>
   <div class="header">
-    <h1>📊 Statistiche ${aziende.length===1?aziende[0]:'Tutte le Aziende'} — Anno ${year}</h1>
+    <h1>📊 Statistiche ${isSingle?aziende[0]:'Tutte le Aziende'} — Anno ${year}</h1>
     <span style="font-size:8px;color:#555">${oggi}</span>
   </div>
   <div class="grid">${cards}</div>
+  ${chartsHtml}
   ${totalForm>0?`<div class="form-section">
     <div class="form-hdr">🎓 Formazione per Tipo — ${totalForm} corsi totali</div>
     <div class="form-body">${formRows}</div>
   </div>`:''}
   <div class="footer">Gestionale Dipendenti — ${oggi}</div>
-  <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
+  <script>
+    window.onload=function(){
+      // Aspetta che tutte le immagini (grafici) siano caricate prima di stampare
+      const imgs=[...document.images];
+      const pending=imgs.filter(img=>!img.complete);
+      if(pending.length===0){
+        setTimeout(()=>window.print(),100);
+      } else {
+        let loaded=0;
+        pending.forEach(img=>{
+          img.onload=img.onerror=()=>{ loaded++; if(loaded===pending.length) setTimeout(()=>window.print(),100); };
+        });
+      }
+      window.onafterprint=function(){window.close();};
+    };
+  <\/script>
   </body></html>`;
   const w=window.open('','_blank');
-  if(!w){toast('Abilita i popup','error');return;}
+  if(!w){toast('Abilita i popup per stampare','error');return;}
   w.document.write(html);w.document.close();
+  console.log('Stampa generata. Grafici inclusi:', chartsHtml.length>0);
 };
 
 App.printStats = function(){
