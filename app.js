@@ -2719,7 +2719,7 @@ App.openStats = function(){
      <button class="btn btn-primary" onclick="App.closeModal()">Chiudi</button>`;
 
   this.openModal();
-  setTimeout(()=>this.renderStats(), 60);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>this.renderStats()));
 
   // Mouse wheel on year selector
   document.getElementById('stats-year').addEventListener('wheel', function(e){
@@ -2889,7 +2889,7 @@ App.renderStats = function(){
     ).join('');
 
   // Draw charts after DOM update (timeout per garantire che il modal sia visibile e dimensionato)
-  setTimeout(()=>App._drawStatsCharts(year, stats, allAz, formByTipo), 80);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>App._drawStatsCharts(year, stats, allAz, formByTipo)));
 
   // Store stats for print
   App._lastStats = {year, stats, formByTipo, totalForm, allAz};
@@ -3027,9 +3027,13 @@ App.printStats = function(){
 
 App._printStatsFor = function(aziende, year){
   if(!App._lastStats) return;
-  const {stats, formByTipo, totalForm} = App._lastStats;
+  const {stats, formByTipo, totalForm, allAz} = App._lastStats;
   const oggi = new Date().toLocaleDateString('it-IT');
   const isSingle = aziende.length === 1;
+
+  // Forza il ridisegno dei grafici prima di estrarli come immagine,
+  // così funziona anche se i canvas non erano ancora stati disegnati
+  try{ App._drawStatsCharts(year, stats, allAz, formByTipo); }catch(e){ console.warn('Ridisegno grafici fallito:', e.message); }
 
   function mfLine(label, obj, color=''){
     const num = typeof obj==='object' ? obj.tot : obj;
