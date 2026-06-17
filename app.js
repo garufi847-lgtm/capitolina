@@ -3031,9 +3031,10 @@ App._printStatsFor = function(aziende, year){
   const oggi = new Date().toLocaleDateString('it-IT');
   const isSingle = aziende.length === 1;
 
-  // Forza il ridisegno dei grafici prima di estrarli come immagine,
-  // così funziona anche se i canvas non erano ancora stati disegnati
-  try{ App._drawStatsCharts(year, stats, allAz, formByTipo); }catch(e){ console.warn('Ridisegno grafici fallito:', e.message); }
+  // Forza il ridisegno dei grafici (solo se stampa singola azienda, serve per i 2 grafici)
+  if(isSingle){
+    try{ App._drawStatsCharts(year, stats, allAz, formByTipo); }catch(e){ console.warn('Ridisegno grafici fallito:', e.message); }
+  }
 
   function mfLine(label, obj, color=''){
     const num = typeof obj==='object' ? obj.tot : obj;
@@ -3077,7 +3078,6 @@ App._printStatsFor = function(aziende, year){
       const key = aziende[0].replace(/[^a-zA-Z0-9]/g,'_');
       const c1 = document.getElementById('chart-'+key+'-stato');
       const c2 = document.getElementById('chart-'+key+'-dettagli');
-      console.log('Canvas trovati:', {c1: !!c1, c2: !!c2, w1: c1?.width, w2: c2?.width});
       const img1 = (c1 && c1.width>0) ? c1.toDataURL('image/png') : '';
       const img2 = (c2 && c2.width>0) ? c2.toDataURL('image/png') : '';
       if(img1 || img2){
@@ -3091,22 +3091,11 @@ App._printStatsFor = function(aziende, year){
       } else {
         chartsHtml = '<div class="chart-warn">⚠ Grafici non disponibili: apri prima la finestra Statistiche e attendi il caricamento, poi stampa.</div>';
       }
-    } else {
-      const cOverall = document.getElementById('chart-overall');
-      console.log('Canvas overall trovato:', !!cOverall, 'width:', cOverall?.width);
-      const imgOverall = (cOverall && cOverall.width>0) ? cOverall.toDataURL('image/png') : '';
-      if(imgOverall){
-        chartsHtml = `<div class="chart-section">
-          <div class="chart-hdr">📊 Grafico Complessivo — Tutte le Aziende</div>
-          <div class="chart-body"><img src="${imgOverall}" class="chart-img-full"/></div>
-        </div>`;
-      } else {
-        chartsHtml = '<div class="chart-warn">⚠ Grafico non disponibile: apri prima la finestra Statistiche e attendi il caricamento, poi stampa.</div>';
-      }
     }
+    // Stampa complessiva (tutte le aziende): nessun grafico, solo dati tabellari
   }catch(e){
     console.warn('Impossibile estrarre i grafici:', e.message);
-    chartsHtml = '<div class="chart-warn">⚠ Errore nel caricamento dei grafici: '+e.message+'</div>';
+    if(isSingle) chartsHtml = '<div class="chart-warn">⚠ Errore nel caricamento dei grafici: '+e.message+'</div>';
   }
 
   const html=`<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"/>
