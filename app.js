@@ -3159,42 +3159,4 @@ App._printStatsFor = function(aziende, year){
   console.log('Stampa generata. Grafici inclusi:', chartsHtml.length>0);
 };
 
-App.printStats = function(){
-  const year = parseInt(document.getElementById('stats-year')?.value || new Date().getFullYear());
-  const content = document.getElementById('stats-content')?.innerHTML || '';
-  const oggi = new Date().toLocaleDateString('it-IT');
-  const html = `<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"/>
-  <title>Statistiche ${year}</title>
-  <style>
-    @page{size:A4 portrait;margin:10mm;}
-    *{box-sizing:border-box;margin:0;padding:0;}
-    body{font-family:Arial,sans-serif;font-size:9px;color:#111;}
-    .header{border-bottom:2px solid #1F4E79;padding-bottom:6px;margin-bottom:12px;display:flex;justify-content:space-between;}
-    .header h1{font-size:14px;font-weight:800;color:#1F4E79;}
-    .stats-az-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;}
-    .stats-az-card{border:1px solid #d1d9e6;border-radius:6px;overflow:hidden;}
-    .stats-az-header{background:#1F4E79;color:#fff;padding:5px 8px;font-size:9px;font-weight:700;}
-    .stats-az-body{padding:6px 8px;}
-    .stats-section-title{font-size:8px;font-weight:700;color:#2E75B6;text-transform:uppercase;margin:5px 0 2px;letter-spacing:.04em;}
-    .stat-row{display:flex;justify-content:space-between;padding:1px 0;font-size:8px;border-bottom:1px solid #f1f5f9;}
-    .stat-row-val{font-weight:700;}
-    .bar-item{display:flex;align-items:center;gap:6px;margin-bottom:5px;}
-    .bar-label{font-size:8px;width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .bar-track{flex:1;height:6px;background:#e5e7eb;border-radius:3px;}
-    .bar-fill{height:100%;background:#0891b2;border-radius:3px;}
-    .bar-count{font-size:8px;width:24px;text-align:right;}
-    .panel{border:1px solid #d1d9e6;border-radius:6px;overflow:hidden;}
-    .panel-header{background:#f5f7fb;padding:6px 10px;font-size:9px;font-weight:700;border-bottom:1px solid #d1d9e6;}
-    .panel-body{padding:8px 10px;}
-    .footer{margin-top:8px;font-size:7px;color:#999;text-align:right;}
-    @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
-  </style></head><body>
-  <div class="header"><h1>📊 Statistiche Dipendenti — Anno ${year}</h1><span>${oggi}</span></div>
-  ${content}
-  <div class="footer">Gestionale Dipendenti — ${oggi}</div>
-  <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
-  </body></html>`;
-  const w=window.open('','_blank');
-  if(!w){toast('Abilita i popup','error');return;}
-  w.document.write(html); w.document.close();
-};
+// (funzione printStats legacy rimossa - era duplicata e copiava innerHTML grezzo coi canvas vuoti)
