@@ -2875,18 +2875,140 @@ App.renderStats = function(){
     </div>`;
   }).join('') || '<p style="color:var(--text3);font-size:13px">Nessun corso per questo anno.</p>';
 
-  document.getElementById('stats-content').innerHTML = `
-    <p style="font-size:12px;color:var(--text3);margin-bottom:14px">
-      I contatori 👨/👩 indicano la suddivisione uomini/donne per ogni voce.
-    </p>
-    <div class="stats-az-grid">${cardsHtml}</div>
-    <div class="panel" style="margin-top:16px">
-      <div class="panel-header">🎓 Formazione per Tipo — Anno ${year} (${totalForm} corsi totali)</div>
-      <div class="panel-body">${formHtml}</div>
-    </div>`;
+  document.getElementById('stats-content').innerHTML =
+    '<p style="font-size:12px;color:var(--text3);margin-bottom:14px">I contatori 👨/👩 indicano la suddivisione uomini/donne per ogni voce.</p>' +
+    '<div class="stats-az-grid">' + cardsHtml + '</div>' +
+    '<div class="panel" style="margin-top:16px"><div class="panel-header">🎓 Formazione per Tipo — Anno ' + year + ' (' + totalForm + ' corsi totali)</div><div class="panel-body">' + formHtml + '</div></div>' +
+    '<div class="panel" style="margin-top:16px"><div class="panel-header">📊 Grafico Complessivo — Anno ' + year + '</div><div class="panel-body"><canvas id="chart-overall" height="120"></canvas></div></div>' +
+    allAz.filter(az=>(stats[az]?.attivi?.tot||0)+(stats[az]?.non_attivi?.tot||0)>0).map(az=>
+      '<div class="panel" style="margin-top:14px"><div class="panel-header">📊 ' + az.replace(' Soc. Coop.','').replace(' Scarl','').replace(' Srl','') + ' — Anno ' + year + '</div>' +
+      '<div class="panel-body" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
+      '<canvas id="chart-' + az.replace(/[^a-zA-Z0-9]/g,'_') + '-stato" height="200"></canvas>' +
+      '<canvas id="chart-' + az.replace(/[^a-zA-Z0-9]/g,'_') + '-dettagli" height="200"></canvas>' +
+      '</div></div>'
+    ).join('');
+
+  // Draw charts after DOM update
+  requestAnimationFrame(()=>App._drawStatsCharts(year, stats, allAz, formByTipo));
 
   // Store stats for print
   App._lastStats = {year, stats, formByTipo, totalForm, allAz};
+};
+
+App._drawStatsCharts = function(year, stats, allAz, formByTipo){
+  function drawBar(canvasId, labels, datasets, title){
+    const canvas = document.getElementById(canvasId);
+    if(!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.offsetWidth || 400;
+    const H = canvas.height || 200;
+    canvas.width = W;
+    const barW = Math.max(8, (W - 60) / (labels.length * datasets.length + labels.length));
+    const groupW = barW * datasets.length + 4;
+    const maxVal = Math.max(1, ...datasets.flatMap(d=>d.data));
+    const COLORS = ['#2563eb','#db2777','#16a34a','#d97706','#7c3aed','#0891b2'];
+    const padL=50, padT=30, padB=60, padR=10;
+    const chartH = H - padT - padB;
+    const chartW = W - padL - padR;
+
+    ctx.clearRect(0,0,W,H);
+    // Title
+    ctx.fillStyle='#374151'; ctx.font='bold 11px Arial'; ctx.textAlign='center';
+    ctx.fillText(title, W/2, 16);
+
+    // Grid lines
+    ctx.strokeStyle='#e5e7eb'; ctx.lineWidth=0.5;
+    for(let i=0;i<=4;i++){
+      const y = padT + chartH - (i/4)*chartH;
+      ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
+      ctx.fillStyle='#9ca3af'; ctx.font='9px Arial'; ctx.textAlign='right';
+      ctx.fillText(Math.round(maxVal*i/4), padL-4, y+3);
+    }
+
+    // Bars
+    labels.forEach((label,gi)=>{
+      const gx = padL + (gi/(labels.length))*(chartW) + chartW/(labels.length*2) - groupW/2;
+      datasets.forEach((ds,di)=>{
+        const val = ds.data[gi]||0;
+        const bx = gx + di*barW;
+        const bh = (val/maxVal)*chartH;
+        const by = padT + chartH - bh;
+        ctx.fillStyle = COLORS[di % COLORS.length];
+        ctx.fillRect(bx, by, barW-2, bh);
+        if(val>0){
+          ctx.fillStyle='#111'; ctx.font='9px Arial'; ctx.textAlign='center';
+          ctx.fillText(val, bx+barW/2-1, by-2);
+        }
+      });
+      // Label
+      ctx.fillStyle='#374151'; ctx.font='9px Arial'; ctx.textAlign='center';
+      const lx = padL + (gi+0.5)*(chartW/labels.length);
+      ctx.save(); ctx.translate(lx, H-padB+14);
+      if(label.length>8){ctx.rotate(-0.4);}
+      ctx.fillText(label.slice(0,14), 0, 0);
+      ctx.restore();
+    });
+
+    // Legend
+    datasets.forEach((ds,di)=>{
+      ctx.fillStyle=COLORS[di%COLORS.length];
+      ctx.fillRect(padL + di*80, H-12, 10, 8);
+      ctx.fillStyle='#374151'; ctx.font='9px Arial'; ctx.textAlign='left';
+      ctx.fillText(ds.label, padL+di*80+13, H-5);
+    });
+  }
+
+  const AZIENDE_SHORT = {
+    'ALIANTE Soc. Coop.':          'ALIANTE',
+    'CAPITOLINA LOGISTICA Scarl':  'CAPITOLINA',
+    'FIPAM  Scarl':                'FIPAM',
+    'SERIAM Scarl':                'SERIAM',
+    'CONSORZIO CAPITOLINA Srl':    'CONSORZIO',
+    'SNA Servizi & Management Srl':'SNA',
+    "SOCIETA' CESTINO":            'CESTINO',
+    'Altra':                       'Altra',
+  };
+
+  const activeAz = allAz.filter(az=>(stats[az]?.attivi?.tot||0)+(stats[az]?.non_attivi?.tot||0)>0);
+  const labels = activeAz.map(az=>AZIENDE_SHORT[az]||az.slice(0,10));
+
+  // ── Grafico complessivo (tutti gli indicatori per azienda) ──────────────────
+  drawBar('chart-overall', labels, [
+    {label:'Attivi',        data: activeAz.map(az=>stats[az].attivi.tot||0)},
+    {label:'Non in forza',  data: activeAz.map(az=>stats[az].non_attivi.tot||0)},
+    {label:'T.Indeterminato',data:activeAz.map(az=>stats[az].indet.tot||0)},
+    {label:'T.Determinato', data: activeAz.map(az=>stats[az].det.tot||0)},
+    {label:'Full Time',     data: activeAz.map(az=>stats[az].fulltime.tot||0)},
+    {label:'Part Time',     data: activeAz.map(az=>stats[az].parttime.tot||0)},
+  ], 'Tutti gli indicatori per Azienda');
+
+  // ── Grafici per singola azienda ────────────────────────────────────────────
+  activeAz.forEach(az=>{
+    const s = stats[az];
+    const key = az.replace(/[^a-zA-Z0-9]/g,'_');
+
+    // Grafico 1: Stato + Genere
+    drawBar('chart-'+key+'-stato',
+      ['Attivi','Non in forza','Uomini','Donne'],
+      [
+        {label:'Totale', data:[s.attivi.tot, s.non_attivi.tot, s.attivi.m+s.non_attivi.m, s.attivi.f+s.non_attivi.f]},
+        {label:'Uomini', data:[s.attivi.m, s.non_attivi.m, 0, 0]},
+        {label:'Donne',  data:[s.attivi.f, s.non_attivi.f, 0, 0]},
+      ],
+      'Stato Dipendenti e Genere'
+    );
+
+    // Grafico 2: Contratto + Orario + Cittadinanza
+    drawBar('chart-'+key+'-dettagli',
+      ['T.Indet.','T.Det.','Full Time','Part Time','EU','ExtraEU'],
+      [
+        {label:'Totale', data:[s.indet.tot, s.det.tot, s.fulltime.tot, s.parttime.tot, s.eu.tot, s.extraeu.tot]},
+        {label:'Uomini', data:[s.indet.m,   s.det.m,   s.fulltime.m,   s.parttime.m,   s.eu.m,   s.extraeu.m]},
+        {label:'Donne',  data:[s.indet.f,   s.det.f,   s.fulltime.f,   s.parttime.f,   s.eu.f,   s.extraeu.f]},
+      ],
+      'Contratto, Orario e Cittadinanza'
+    );
+  });
 };
 
 App.printSingleStats = function(az, year){
