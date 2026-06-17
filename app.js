@@ -2879,9 +2879,9 @@ App.renderStats = function(){
     '<p style="font-size:12px;color:var(--text3);margin-bottom:14px">I contatori 👨/👩 indicano la suddivisione uomini/donne per ogni voce.</p>' +
     '<div class="stats-az-grid">' + cardsHtml + '</div>' +
     '<div class="panel" style="margin-top:16px"><div class="panel-header">🎓 Formazione per Tipo — Anno ' + year + ' (' + totalForm + ' corsi totali)</div><div class="panel-body">' + formHtml + '</div></div>' +
-    '<div class="panel" style="margin-top:16px"><div class="panel-header">📊 Grafico Complessivo — Anno ' + year + '</div><div class="panel-body"><canvas id="chart-overall" height="120"></canvas></div></div>' +
+    '<div class="panel stats-content-screen-only" style="margin-top:16px"><div class="panel-header">📊 Grafico Complessivo — Anno ' + year + '</div><div class="panel-body"><canvas id="chart-overall" height="120"></canvas></div></div>' +
     allAz.filter(az=>(stats[az]?.attivi?.tot||0)+(stats[az]?.non_attivi?.tot||0)>0).map(az=>
-      '<div class="panel" style="margin-top:14px"><div class="panel-header">📊 ' + az.replace(' Soc. Coop.','').replace(' Scarl','').replace(' Srl','') + ' — Anno ' + year + '</div>' +
+      '<div class="panel stats-content-screen-only" style="margin-top:14px"><div class="panel-header">📊 ' + az.replace(' Soc. Coop.','').replace(' Scarl','').replace(' Srl','') + ' — Anno ' + year + '</div>' +
       '<div class="panel-body" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
       '<canvas id="chart-' + az.replace(/[^a-zA-Z0-9]/g,'_') + '-stato" height="200"></canvas>' +
       '<canvas id="chart-' + az.replace(/[^a-zA-Z0-9]/g,'_') + '-dettagli" height="200"></canvas>' +

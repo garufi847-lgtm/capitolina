@@ -1078,3 +1078,14 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
   font-size: 11px;
   color: var(--text3);
 }
+
+/* ── STAMPA DIRETTA DA BROWSER (Ctrl+P) ──────────────────── */
+@media print {
+  #sidebar, #topbar, .modal-footer, #fenix-footer, .stats-print-btn { display: none !important; }
+  .modal-overlay { position: static !important; background: none !important; }
+  .modal { box-shadow: none !important; max-height: none !important; }
+  .modal-body { overflow: visible !important; max-height: none !important; }
+  /* Nascondi i grafici per-azienda a schermo se si stampa con Ctrl+P:
+     l'unico modo corretto per stampare le statistiche è il bottone 🖨 Stampa dell'app */
+  .stats-content-screen-only { display: none !important; }
+}
