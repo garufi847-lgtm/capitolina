@@ -2216,11 +2216,13 @@ let _advTable = '';
 let _advCriteria = [];
 
 App.advCriteria = [];
+App.advCustomFilterKey = null;
 
 App.openAdvSearch = function(t){
   _advTable = t;
   _advRowCount = 0;
   App.advCriteria = [];
+  App.advCustomFilterKey = null;
 
   document.getElementById('modal-title').textContent = '🔍 Ricerca Avanzata — '+TABLE_META[t].label;
   document.getElementById('modal-body').innerHTML = `
@@ -2401,6 +2403,7 @@ App.applyAdvSearch = function(){
 
 App.resetAdvFilters = function(){
   App.advCriteria = [];
+  App.advCustomFilterKey = null;
   App.filter = '';
   document.getElementById('search-input').value = '';
   document.getElementById('adv-rows').innerHTML = '';
@@ -2512,6 +2515,9 @@ App.renderTable = function(t){
   if(this.advCriteria && this.advCriteria.length){
     rows=rows.filter(r=>advMatchesCriteria(r, this.advCriteria));
   }
+  if(this.advCustomFilterKey){
+    rows=applyCustomFilter(this.advCustomFilterKey, rows);
+  }
   if(this.sortCol){
     const sc=this.sortCol, sd=this.sortDir;
     rows=[...rows].sort((a,b)=>{
@@ -2535,9 +2541,9 @@ App.renderTable = function(t){
   if(this.page>tp)this.page=tp;
   const s0=(this.page-1)*this.pageSize, page=rows.slice(s0,s0+this.pageSize);
 
-  const advCount=this.advCriteria?this.advCriteria.length:0;
+  const advCount=(this.advCriteria?this.advCriteria.length:0) + (this.advCustomFilterKey?1:0);
   const advBadge=advCount?`<span style="background:var(--accent);color:#fff;border-radius:12px;padding:1px 8px;font-size:11px;margin-left:4px">${advCount} filtri</span>`:'';
-  const resetBtn=advCount?`<button class="btn btn-ghost" style="font-size:12px;color:var(--danger)" onclick="App.advCriteria=[];App.renderTable('${t}')">✕ Rimuovi filtri</button>`:'';
+  const resetBtn=advCount?`<button class="btn btn-ghost" style="font-size:12px;color:var(--danger)" onclick="App.advCriteria=[];App.advCustomFilterKey=null;App.renderTable('${t}')">✕ Rimuovi filtri</button>`:'';
 
   const ths=cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+
     `<th style="width:100px;cursor:pointer" onclick="App.sortCol=null;App.sortDir=1;App.renderTable('${t}')" title="Torna all'ordine di inserimento">
@@ -2900,25 +2906,8 @@ function applyCustomFilter(key, rows){
   if(key === 'cont_scadenza_30_proroga'){
     const now = new Date(); now.setHours(0,0,0,0);
     const lim30 = new Date(now); lim30.setDate(now.getDate()+30);
-
-    // Il campo "Stato Dipendente" copiato dentro Contratti può non essere sincronizzato
-    // con l'ultimo stato reale del dipendente (es. se è stato aggiornato solo in Dipendenti
-    // dopo l'import). Per sicurezza, verifichiamo lo stato AGGIORNATO leggendolo direttamente
-    // dalla tabella Dipendenti, incrociando per N° Socio.
-    const normalizeNSocio = s => String(s||'').trim().replace(',', '.').toUpperCase();
-    const dipendentiByNSocio = {};
-    Store.getRows('dipendenti').forEach(d=>{
-      const key = normalizeNSocio(d['N° Socio']);
-      if(key) dipendentiByNSocio[key] = d;
-    });
-
     return rows.filter(r=>{
-      const nSocio = normalizeNSocio(r['Id Dipendente (N° Socio)']);
-      const dip = dipendentiByNSocio[nSocio];
-      // Stato reale: preferisci quello in Dipendenti se troviamo un match, altrimenti fallback su Contratti
-      const statoReale = dip ? dip['Stato Dipendente'] : r['Stato Dipendente'];
-      if(String(statoReale||'').trim().toUpperCase() !== 'ATTIVO') return false;
-
+      if(String(r['Stato Dipendente']||'').trim().toUpperCase() !== 'ATTIVO') return false;
       const expiry = getEffectiveContractExpiry(r);
       if(!expiry) return false;
       return expiry >= now && expiry <= lim30;
@@ -3026,6 +3015,7 @@ App.applyQuickFilter = function(t, id){
   const s = searches.find(x => x.id === id);
   if(!s) return;
   App.advCriteria = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
+  App.advCustomFilterKey = s.customFilter || null;
   App.filter = '';
   document.getElementById('search-input').value = '';
   App.page = 1;
