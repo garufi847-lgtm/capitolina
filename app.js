@@ -22,14 +22,62 @@ const Auth={
 // ─── STORE ────────────────────────────────────────────────────────────────────
 const Store = {
   data:{},
-  load(){
+  _nasBase(){ return typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : ''; },
+
+  // Carica i dati: se il NAS è configurato e raggiungibile, usa quelli (fonte di verità condivisa);
+  // altrimenti fallback su localStorage (modalità locale/offline/GitHub Pages)
+  async load(){
+    const base = this._nasBase();
     for(const t of ['dipendenti','contratti','formazione','sorveglianza','aziende']){
-      const local=localStorage.getItem('gest_data_'+t);
-      if(local){ try{this.data[t]=JSON.parse(local);}catch{this.data[t]=JSON.parse(JSON.stringify(EMBEDDED_DATA[t]));} }
-      else{ this.data[t]=JSON.parse(JSON.stringify(EMBEDDED_DATA[t])); this.save(t); }
+      let loadedFromNas = false;
+      if(base){
+        try{
+          const r = await fetch(`${base}/api/${t}`);
+          if(r.ok){
+            const remote = await r.json();
+            // Solo se il NAS ha REALMENTE dati validi con colonne popolate.
+            // Se columns è vuoto (tabella non ancora inizializzata sul server),
+            // NON sovrascrivere: meglio usare i dati locali/embedded e poi sincronizzarli.
+            if(remote && Array.isArray(remote.rows) && Array.isArray(remote.columns) && remote.columns.length>0){
+              this.data[t] = remote;
+              localStorage.setItem('gest_data_'+t, JSON.stringify(remote)); // cache locale di backup
+              loadedFromNas = true;
+            }
+          }
+        }catch(e){ console.warn('Store.load: NAS non raggiungibile per', t, e.message); }
+      }
+      if(!loadedFromNas){
+        const local = localStorage.getItem('gest_data_'+t);
+        if(local){
+          try{
+            const parsedLocal = JSON.parse(local);
+            // Stesso controllo: se anche il locale ha columns vuoto, usa l'embedded
+            if(parsedLocal && Array.isArray(parsedLocal.columns) && parsedLocal.columns.length>0){
+              this.data[t] = parsedLocal;
+            } else {
+              this.data[t] = JSON.parse(JSON.stringify(EMBEDDED_DATA[t]));
+            }
+          }catch{ this.data[t]=JSON.parse(JSON.stringify(EMBEDDED_DATA[t])); }
+        }
+        else{ this.data[t]=JSON.parse(JSON.stringify(EMBEDDED_DATA[t])); }
+        // Se il NAS è configurato ma non aveva ancora dati validi per questa tabella, inizializzalo ora
+        if(base) this.save(t);
+      }
     }
   },
-  save(t){ localStorage.setItem('gest_data_'+t,JSON.stringify(this.data[t])); },
+
+  // Salva: sempre in localStorage (cache/fallback) e, se il NAS è configurato, anche lì (sorgente condivisa)
+  save(t){
+    localStorage.setItem('gest_data_'+t, JSON.stringify(this.data[t]));
+    const base = this._nasBase();
+    if(base){
+      fetch(`${base}/api/${t}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(this.data[t])
+      }).catch(e => console.warn('Store.save: sync NAS fallita per', t, e.message));
+    }
+  },
   getRows(t){ return this.data[t]?.rows||[]; },
   getCols(t){ return this.data[t]?.columns||[]; },
   addRow(t,row){ row._id=Date.now().toString(36)+Math.random().toString(36).slice(2); this.data[t].rows.push(row); this.save(t); },
@@ -165,9 +213,89 @@ const ALLEGATI_AFTER = {
   sorveglianza: '🏥 Visita Medica',
 };
 
+// Mappa: colonna Excel (nome esatto come da export QuintaDB) → slot allegati corrispondente.
+// Usata durante l'import per scaricare automaticamente i PDF dai vecchi link QuintaDB
+// e associarli come allegati al record appena importato.
+const PDF_LINK_COLUMNS = {
+  dipendenti: {
+    'Allegati documenti permesso': 'permesso',
+  },
+  contratti: {
+    'UNILAV ASSUNZIONE':       'unilav_ass',
+    'UNILAV PROROGHE':         'unilav_pro',
+    'UNILAV TRASFORMAZIONI':   'unilav_tra',
+    'UNILAV CESSAZIONE':       'unilav_ces',
+  },
+  formazione: {
+    'Allegati formazione (Attestati)':       'formazione',
+    'Allegati aggiornamento formazione':     'agg_formazione',
+  },
+  sorveglianza: {
+    'Attestato Idoneità':  'idoneita_single',
+    'Attestato Idoneità ': 'idoneita_single', // variante con spazio finale vista nei file reali
+  },
+};
+
+// Il file "Scheda Anagrafica Dipendenti" esportato da QuintaDB contiene anche un blocco
+// di colonne ANNIDATE senza intestazione propria ("Riepilogo Dati contrattuali", seguito
+// da 25 sotto-colonne senza nome: __EMPTY_1, __EMPTY_2 ecc.) con un riepilogo del contratto
+// corrente del dipendente, inclusi gli stessi link PDF UNILAV già presenti nel file Contratti.
+// Questo blocco serve come FALLBACK: se durante l'import di Contratti un link non era presente,
+// proviamo a recuperarlo da qui, associandolo al contratto giusto tramite N° Socio.
+// Offset relativo (0-based) dall'inizio del blocco "Riepilogo Dati contrattuali" allo slot:
+const NESTED_CONTRATTI_BLOCK = {
+  startColumn: 'Riepilogo Dati contrattuali', // prima colonna del blocco nel file Dipendenti
+  endColumn:   'Rilasciato da Questura',      // prima colonna DOPO il blocco (usata per delimitarlo)
+  offsets: {
+    12: 'unilav_ass', // UNILAV Assunzione (confermato sui dati reali)
+    // Altri offset (proroghe/trasformazioni/cessazioni) non risultano popolati negli export
+    // analizzati; se in futuro si trovano valori, aggiungere qui: es. 24:'unilav_pro' ecc.
+  },
+};
+
 const Allegati = {
   // URL base API NAS - stessa della store
   base(){ return typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : ''; },
+
+  // Estrae tutti gli URL PDF da un valore di cella (possono essere multipli, separati da virgola)
+  _extractPdfUrls(cellValue){
+    const s = String(cellValue||'');
+    const matches = s.match(/https?:\/\/[^\s,]+\.pdf[^\s,]*/gi) || [];
+    return matches.map(u=>u.trim());
+  },
+
+  // Durante l'import Excel: per ogni colonna nota con link PDF (vedi PDF_LINK_COLUMNS),
+  // scarica i file dal vecchio sistema (QuintaDB) e li allega al record appena creato sul NAS.
+  // Ritorna {ok, fail} con i conteggi.
+  async importFromRow(table, rawRow, recordId){
+    const base = this.base();
+    if(!base) return {ok:0, fail:0, skipped:true}; // richiede NAS configurato
+
+    const colMap = PDF_LINK_COLUMNS[table];
+    if(!colMap) return {ok:0, fail:0};
+
+    let ok=0, fail=0;
+    for(const [colName, slot] of Object.entries(colMap)){
+      const cellValue = rawRow[colName];
+      if(cellValue===undefined || cellValue===null || !String(cellValue).trim()) continue;
+      const urls = this._extractPdfUrls(cellValue);
+      for(const url of urls){
+        try{
+          const originalName = decodeURIComponent(url.split('/').pop()||'allegato.pdf');
+          const r = await fetch(`${base}/files/import-from-url/${recordId}/${slot}`, {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({url, originalName})
+          });
+          if(r.ok) ok++; else fail++;
+        }catch(e){
+          console.warn('Allegati.importFromRow: errore download', url, e.message);
+          fail++;
+        }
+      }
+    }
+    return {ok, fail};
+  },
 
   // Apri modale allegati per un record
   async openModal(table, recordId, slotDef){
@@ -229,19 +357,38 @@ const Allegati = {
 
   async upload(table, recordId, slot, single, input){
     const file = input.files[0];
-    if(!file) return;
-    if(file.type !== 'application/pdf'){ toast('Solo file PDF','error'); return; }
+    if(!file){ console.warn('Allegati.upload: nessun file selezionato'); return; }
+
+    // Controllo PDF più permissivo: alcuni browser/dispositivi non riportano
+    // correttamente il MIME type, quindi controlliamo anche l'estensione
+    const isPdfMime = file.type === 'application/pdf';
+    const isPdfExt  = file.name.toLowerCase().endsWith('.pdf');
+    if(!isPdfMime && !isPdfExt){
+      toast('Solo file PDF (file selezionato: '+(file.type||'tipo sconosciuto')+')','error');
+      console.warn('Allegati.upload: file non PDF', {name:file.name, type:file.type});
+      return;
+    }
 
     const base = this.base();
+    console.log('Allegati.upload: inizio upload', {table, recordId, slot, base: base||'(locale)', fileName:file.name, fileSize:file.size});
+
     if(base){
       // Carica sul NAS
       const fd = new FormData();
       fd.append('file', file);
       try{
         const r = await fetch(`${base}/files/${recordId}/${slot}`, { method:'POST', body:fd });
-        if(!r.ok) throw new Error('Upload fallito');
+        console.log('Allegati.upload: risposta server', r.status);
+        if(!r.ok){
+          const errText = await r.text().catch(()=>'');
+          throw new Error('HTTP '+r.status+(errText?': '+errText:''));
+        }
         toast('Allegato caricato ✓');
-      }catch(e){ toast('Errore upload: '+e.message,'error'); return; }
+      }catch(e){
+        console.error('Allegati.upload: ERRORE', e);
+        toast('Errore upload: '+e.message,'error');
+        return;
+      }
     } else {
       // Modalità locale: salva come base64 in localStorage
       const reader = new FileReader();
@@ -668,7 +815,8 @@ const App = {
       btnWrap.innerHTML =
         (Auth.can('stats')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.openStats()">📊 Statistiche per Anno</button>':'')+
         '<button class="btn btn-ghost" style="font-size:13px" onclick="App.exportGestionale()">↓ Esporta Gestionale</button>' +
-        '<button class="btn btn-primary" style="font-size:13px" onclick="App.importGestionale()">📂 Importa Gestionale</button>';
+        '<button class="btn btn-primary" style="font-size:13px" onclick="App.importGestionale()">📂 Importa Gestionale</button>' +
+        (Auth.can('manage_users')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.cleanupEmptyAttachments()" title="Rimuove allegati PDF da 0 byte rimasti da download falliti">🧹 Pulisci Allegati Vuoti</button>':'');
       topbarEl.appendChild(btnWrap);
     }
 
@@ -1481,6 +1629,23 @@ const App = {
   },
 
   // ── IMPORTA GESTIONALE (ZIP con PDF o XLSX) ─────────────────────────────────
+  async cleanupEmptyAttachments(){
+    const base = typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : '';
+    if(!base){ toast('Funzione disponibile solo con NAS configurato','error'); return; }
+    if(!confirm('Rimuovere tutti gli allegati PDF da 0 byte (rotti)? Questa operazione non è reversibile.')) return;
+    try{
+      const r = await fetch(`${base}/files/cleanup-empty`, { method:'DELETE' });
+      const data = await r.json();
+      if(r.ok){
+        toast(`Pulizia completata: ${data.removed} file vuoti rimossi`, data.removed>0?'success':'success');
+      } else {
+        toast('Errore pulizia: '+(data.error||'sconosciuto'),'error');
+      }
+    }catch(e){
+      toast('Errore pulizia: '+e.message,'error');
+    }
+  },
+
   importGestionale(){
     const base = typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : '';
 
@@ -1573,13 +1738,13 @@ const App = {
           document.getElementById('confirm-title').textContent='📂 Importa Gestionale Completo';
           document.getElementById('confirm-msg').textContent=
             `Trovati ${matchedSheets.length} fogli nel file "${file.name}":\n${preview}\n\nSostituisce TUTTI i dati esistenti.`;
-          this._setupConfirmBtns('Importa tutto',()=>{
+          this._setupConfirmBtns('Importa tutto',async()=>{
             let total=0;
             for(const sheetName of matchedSheets){
               const t=sheetMap[sheetName];
               const ws=wb.Sheets[sheetName];
               const rows=XLSX.utils.sheet_to_json(ws,{raw:false,defval:''});
-              this._doReplace(t,rows);
+              await this._doReplace(t,rows);
               total+=rows.length;
             }
             toast(`Importati ${total} record su ${matchedSheets.length} tabelle ✓`);
@@ -1605,10 +1770,10 @@ const App = {
           let addBtn=document.getElementById('_addBtn');
           if(!addBtn){addBtn=document.createElement('button');addBtn.id='_addBtn';existingBtns.insertBefore(addBtn,document.getElementById('confirm-ok'));}
           addBtn.className='btn btn-primary';addBtn.textContent='Aggiungi';addBtn.style.display='';
-          addBtn.onclick=()=>{this._doAppend(tableName,rows);this._resetConfirm();this.closeConfirm();};
+          addBtn.onclick=async()=>{await this._doAppend(tableName,rows);this._resetConfirm();this.closeConfirm();};
           document.getElementById('confirm-ok').textContent='Sostituisci';
           document.getElementById('confirm-ok').className='btn btn-danger';
-          document.getElementById('confirm-ok').onclick=()=>{this._doReplace(tableName,rows);this._resetConfirm();this.closeConfirm();};
+          document.getElementById('confirm-ok').onclick=async()=>{await this._doReplace(tableName,rows);this._resetConfirm();this.closeConfirm();};
           document.getElementById('confirm-overlay').classList.add('open');
           return;
         }
@@ -1684,29 +1849,164 @@ const App = {
     return row;
   },
 
-  _doReplace(t,rawRows){
+  async _doReplace(t,rawRows){
     // Salta righe completamente vuote
     const validRows=rawRows.filter(r=>Object.values(r).some(v=>v!==null&&v!==undefined&&String(v).trim()!==''));
-    Store.data[t].rows=validRows.map(r=>{
+    // Garantisce che le colonne non siano mai vuote (es. se il NAS non le aveva ancora inizializzate)
+    if(!Store.data[t].columns || !Store.data[t].columns.length){
+      Store.data[t].columns = JSON.parse(JSON.stringify(EMBEDDED_DATA[t].columns));
+    }
+    const pairs = validRows.map(r=>{
       const row=this._mapRow(t,r);
       row._id=Date.now().toString(36)+Math.random().toString(36).slice(2);
-      return row;
+      return {row, rawRow:r};
     });
+    Store.data[t].rows = pairs.map(p=>p.row);
     Store.save(t);
     const b=document.getElementById('badge-'+t); if(b)b.textContent=Store.getRows(t).length;
     if(this.table===t) this.renderTable(t);
     // Se siamo nella dashboard, aggiorna la dashboard
     if(this.view==='dashboard') this.renderDash();
+
+    // Scarica e allega i PDF collegati nel vecchio sistema (se il NAS è configurato e ci sono link)
+    await this._importAttachmentsForRows(t, pairs);
+
+    // Caso speciale: il file Dipendenti contiene anche un riepilogo annidato dei contratti
+    // con eventuali link PDF (es. UNILAV Assunzione) usati come fallback/recupero.
+    if(t==='dipendenti') await this._importNestedContrattiAttachments(pairs);
   },
 
-  _doAppend(t,rawRows){
+  async _doAppend(t,rawRows){
     const validRows=rawRows.filter(r=>Object.values(r).some(v=>v!==null&&v!==undefined&&String(v).trim()!==''));
+    // Garantisce che le colonne non siano mai vuote (es. se il NAS non le aveva ancora inizializzate)
+    if(!Store.data[t].columns || !Store.data[t].columns.length){
+      Store.data[t].columns = JSON.parse(JSON.stringify(EMBEDDED_DATA[t].columns));
+    }
+    const pairs = [];
     validRows.forEach(r=>{
       const row=this._mapRow(t,r);
       Store.addRow(t,row);
+      pairs.push({row, rawRow:r});
     });
     const b=document.getElementById('badge-'+t); if(b)b.textContent=Store.getRows(t).length;
     if(this.table===t) this.renderTable(t);
+
+    await this._importAttachmentsForRows(t, pairs);
+
+    if(t==='dipendenti') await this._importNestedContrattiAttachments(pairs);
+  },
+
+  // Per ogni riga importata, scarica eventuali PDF collegati (vecchi link QuintaDB) e li allega.
+  // Mostra un toast di riepilogo al termine. Richiede NAS configurato; altrimenti viene saltato.
+  async _importAttachmentsForRows(t, pairs){
+    if(!PDF_LINK_COLUMNS[t]) return;
+    if(!Allegati.base()) return; // nessun NAS configurato: niente da scaricare
+
+    const hasAnyLink = pairs.some(p=>
+      Object.keys(PDF_LINK_COLUMNS[t]).some(col=>{
+        const v = p.rawRow[col];
+        return v && Allegati._extractPdfUrls(v).length>0;
+      })
+    );
+    if(!hasAnyLink) return;
+
+    toast(`Download allegati PDF in corso (potrebbe richiedere qualche minuto)...`);
+    let totalOk=0, totalFail=0, rowsWithLinks=0;
+    for(const {row, rawRow} of pairs){
+      const hasLink = Object.keys(PDF_LINK_COLUMNS[t]).some(col=>{
+        const v=rawRow[col]; return v && Allegati._extractPdfUrls(v).length>0;
+      });
+      if(!hasLink) continue;
+      rowsWithLinks++;
+      const result = await Allegati.importFromRow(t, rawRow, row._id);
+      totalOk += result.ok||0;
+      totalFail += result.fail||0;
+    }
+    if(rowsWithLinks>0){
+      toast(`Allegati importati: ${totalOk} ok${totalFail?`, ${totalFail} falliti`:''} (${rowsWithLinks} record con link)`, totalFail?'error':'success');
+    }
+  },
+
+  // Caso speciale: il file "Scheda Anagrafica Dipendenti" contiene un blocco annidato
+  // ("Riepilogo Dati contrattuali") con un riepilogo del contratto corrente, inclusi
+  // eventuali link PDF (es. UNILAV Assunzione). Questa funzione recupera quei link e li
+  // allega al CONTRATTO corrispondente (trovato per N° Socio), non al dipendente stesso.
+  // Va eseguita DOPO aver importato sia Contratti che Dipendenti.
+  async _importNestedContrattiAttachments(dipendentiPairs){
+    if(!Allegati.base()){ console.log('_importNestedContrattiAttachments: NAS non configurato, salto'); return; }
+    const { startColumn, endColumn, offsets } = NESTED_CONTRATTI_BLOCK;
+    if(!Object.keys(offsets).length) return;
+
+    let totalOk=0, totalFail=0, rowsProcessed=0;
+    let debugNoStartCol=0, debugNoEndCol=0, debugNoSocio=0, debugNoMatch=0, debugChecked=0;
+
+    for(const {rawRow} of dipendentiPairs){
+      debugChecked++;
+      const keys = Object.keys(rawRow);
+      const startIdx = keys.indexOf(startColumn);
+      const endIdx = keys.indexOf(endColumn);
+      if(startIdx===-1){ debugNoStartCol++; continue; }
+      if(endIdx===-1 || endIdx<=startIdx){ debugNoEndCol++; continue; }
+
+      // Trova il N° Socio nel blocco annidato (prima colonna del blocco, offset 0)
+      const nSocioNested = String(rawRow[keys[startIdx]]||'').trim();
+      if(!nSocioNested){ debugNoSocio++; continue; }
+      // Normalizza: nei file reali capita sia "0159.LO" che, per errore di digitazione
+      // originale in QuintaDB, "2324,AL" (virgola invece di punto)
+      const normalize = s => s.trim().replace(',', '.').toUpperCase();
+      const nSocioNestedNorm = normalize(nSocioNested);
+
+      // Trova il contratto corrispondente già importato, tramite N° Socio
+      const contrattoRow = Store.getRows('contratti').find(c=>
+        normalize(String(c['Id Dipendente (N° Socio)']||c['N° Socio']||'')) === nSocioNestedNorm
+      );
+      if(!contrattoRow){ debugNoMatch++; continue; }
+
+      let rowHadLink=false;
+      for(const [offsetStr, slot] of Object.entries(offsets)){
+        const offset = parseInt(offsetStr,10);
+        const colIdx = startIdx + offset;
+        if(colIdx>=endIdx) continue;
+        const cellValue = rawRow[keys[colIdx]];
+        if(!cellValue || !String(cellValue).trim()) continue;
+        const urls = Allegati._extractPdfUrls(cellValue);
+        if(!urls.length) continue;
+        rowHadLink = true;
+        for(const url of urls){
+          try{
+            const originalName = decodeURIComponent(url.split('/').pop()||'allegato.pdf');
+            const r = await fetch(`${Allegati.base()}/files/import-from-url/${contrattoRow._id}/${slot}`, {
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({url, originalName})
+            });
+            if(r.ok) totalOk++; else totalFail++;
+          }catch(e){
+            console.warn('_importNestedContrattiAttachments: errore download', url, e.message);
+            totalFail++;
+          }
+        }
+      }
+      if(rowHadLink) rowsProcessed++;
+    }
+
+    console.log('_importNestedContrattiAttachments DEBUG:', {
+      righeControllate: debugChecked,
+      senzaColonnaInizio: debugNoStartCol,
+      senzaColonnaFine: debugNoEndCol,
+      senzaNSocio: debugNoSocio,
+      nessunContrattoTrovato: debugNoMatch,
+      righeConLinkProcessate: rowsProcessed,
+      totalOk, totalFail
+    });
+
+    if(rowsProcessed>0){
+      toast(`Allegati contratti recuperati da Dipendenti: ${totalOk} ok${totalFail?`, ${totalFail} falliti`:''} (${rowsProcessed} record)`, totalFail?'error':'success');
+    } else if(debugNoStartCol === debugChecked && debugChecked>0){
+      toast(`Recupero allegati da Dipendenti: nessun blocco "Riepilogo Dati contrattuali" trovato nel file (controlla la console per dettagli)`, 'error');
+    } else if(debugNoMatch>0 && debugNoMatch===debugChecked-debugNoStartCol-debugNoEndCol-debugNoSocio){
+      toast(`Recupero allegati da Dipendenti: trovati link ma nessun contratto corrispondente per N° Socio (controlla la console)`, 'error');
+    }
   },
 
   // Kept for backward compat
@@ -1748,11 +2048,13 @@ const App = {
 // ─── BOOT ─────────────────────────────────────────────────────────────────────
 window.addEventListener('keydown',e=>App.handleKey(e));
 ['login-user','login-pass'].forEach(id=>document.getElementById(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')App.login();}));
-try{ Store.load(); }catch(e){ console.error('Store error:',e); }
-document.getElementById('loading').classList.add('hidden');
-const _sess=Auth.current();
-if(_sess){ document.getElementById('login-screen').style.display='none'; App.initApp(_sess); }
-else      { document.getElementById('login-screen').style.display='flex'; }
+(async()=>{
+  try{ await Store.load(); }catch(e){ console.error('Store error:',e); }
+  document.getElementById('loading').classList.add('hidden');
+  const _sess=Auth.current();
+  if(_sess){ document.getElementById('login-screen').style.display='none'; App.initApp(_sess); }
+  else      { document.getElementById('login-screen').style.display='flex'; }
+})();
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 
 // ─── RICERCA AVANZATA ─────────────────────────────────────────────────────────
