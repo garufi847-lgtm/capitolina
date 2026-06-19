@@ -2618,6 +2618,72 @@ const QUICK_SEARCHES = {
       ]
     },
     {
+      id:'capitolina_permessi', icon:'🌍',
+      label:'CAPITOLINA LOGISTICA — Scadenzario Permessi di Soggiorno',
+      desc:'Dipendenti CAPITOLINA LOGISTICA con permesso di soggiorno',
+      table:'dipendenti',
+      cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
+      criteria:[
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'CAPITOLINA LOGISTICA Scarl', val2:'', connector:'AND'},
+        {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                           val2:'', connector:'AND'},
+      ]
+    },
+    {
+      id:'fipam_permessi', icon:'🌍',
+      label:'FIPAM — Scadenzario Permessi di Soggiorno',
+      desc:'Dipendenti FIPAM con permesso di soggiorno',
+      table:'dipendenti',
+      cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
+      criteria:[
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'FIPAM  Scarl', val2:'', connector:'AND'},
+        {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',             val2:'', connector:'AND'},
+      ]
+    },
+    {
+      id:'seriam_permessi', icon:'🌍',
+      label:'SERIAM — Scadenzario Permessi di Soggiorno',
+      desc:'Dipendenti SERIAM con permesso di soggiorno',
+      table:'dipendenti',
+      cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
+      criteria:[
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'SERIAM Scarl', val2:'', connector:'AND'},
+        {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',             val2:'', connector:'AND'},
+      ]
+    },
+    {
+      id:'consorzio_permessi', icon:'🌍',
+      label:'CONSORZIO CAPITOLINA — Scadenzario Permessi di Soggiorno',
+      desc:'Dipendenti CONSORZIO CAPITOLINA con permesso di soggiorno',
+      table:'dipendenti',
+      cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
+      criteria:[
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'CONSORZIO CAPITOLINA Srl', val2:'', connector:'AND'},
+        {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                         val2:'', connector:'AND'},
+      ]
+    },
+    {
+      id:'sna_permessi', icon:'🌍',
+      label:'SNA — Scadenzario Permessi di Soggiorno',
+      desc:'Dipendenti SNA Servizi & Management con permesso di soggiorno',
+      table:'dipendenti',
+      cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
+      criteria:[
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'SNA Servizi & Management Srl', val2:'', connector:'AND'},
+        {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                             val2:'', connector:'AND'},
+      ]
+    },
+    {
+      id:'cestino_permessi', icon:'🌍',
+      label:'CESTINO — Scadenzario Permessi di Soggiorno',
+      desc:"Dipendenti SOCIETA' CESTINO con permesso di soggiorno",
+      table:'dipendenti',
+      cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
+      criteria:[
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:"SOCIETA' CESTINO", val2:'', connector:'AND'},
+        {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                 val2:'', connector:'AND'},
+      ]
+    },
+    {
       id:'tutti_permessi', icon:'🌍',
       label:'Scadenzario Permessi — Tutti',
       desc:'Tutti i dipendenti con permesso in scadenza (anno corrente e precedente)',
@@ -2748,13 +2814,11 @@ const QUICK_SEARCHES = {
     {
       id:'cont_scadenza_30', icon:'📅',
       label:'Contratti in Scadenza — Prossimi 30 Giorni',
-      desc:'Contratti a tempo determinato in scadenza',
+      desc:'Contratti a tempo determinato in scadenza (considerando l\'ultima proroga) — solo dipendenti ATTIVI',
       table:'contratti',
-      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Data inizio','Scadenza Contratto','Mansione'],
-      criteria:[
-        {field:'Scadenza Contratto',       fieldDef:{type:'date'},   op:'next_30_days', val1:'', val2:'', connector:'AND'},
-        {field:'Tipologia contrattuale',   fieldDef:{type:'select'}, op:'is', val1:'Tempo determinato', val2:'', connector:'AND'},
-      ]
+      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Data inizio','Scadenza Contratto','Data Proroga 1','Data Proroga 2','Data Proroga 3','Data Proroga 4','Mansione'],
+      criteria:[], // gestito da customFilter
+      customFilter: 'cont_scadenza_30_proroga',
     },
     {
       id:'cont_indeterminato', icon:'✅',
@@ -2799,6 +2863,32 @@ function buildDynamicCriteria(dynamicKey){
   return [];
 }
 
+// Calcola la data di scadenza EFFETTIVA di un contratto: se ci sono proroghe (Data Proroga 1-4),
+// usa la più recente tra quelle compilate; altrimenti usa "Scadenza Contratto".
+function getEffectiveContractExpiry(row){
+  const candidates = ['Data Proroga 4','Data Proroga 3','Data Proroga 2','Data Proroga 1','Scadenza Contratto']
+    .map(col => advParseDate(row[col]))
+    .filter(d => d);
+  if(!candidates.length) return null;
+  return candidates.reduce((max,d) => d > max ? d : max);
+}
+
+// Filtri custom: usati quando la logica non è esprimibile con i criteri standard campo/operatore
+// (es. richiede un calcolo su più colonne, come la data di scadenza effettiva con proroghe)
+function applyCustomFilter(key, rows){
+  if(key === 'cont_scadenza_30_proroga'){
+    const now = new Date(); now.setHours(0,0,0,0);
+    const lim30 = new Date(now); lim30.setDate(now.getDate()+30);
+    return rows.filter(r=>{
+      if(String(r['Stato Dipendente']||'').trim().toUpperCase() !== 'ATTIVO') return false;
+      const expiry = getEffectiveContractExpiry(r);
+      if(!expiry) return false;
+      return expiry >= now && expiry <= lim30;
+    });
+  }
+  return rows;
+}
+
 // ── Quick search modal ────────────────────────────────────────────────────────
 App.openQuickSearches = function(t){
   const searches = QUICK_SEARCHES[t] || [];
@@ -2811,7 +2901,9 @@ App.openQuickSearches = function(t){
   searches.forEach(s => {
     const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
     const srcRows = Store.getRows(s.table || t);
-    const count = srcRows.filter(r => advMatchesCriteria(r, crit)).length;
+    let matched = srcRows.filter(r => advMatchesCriteria(r, crit));
+    if(s.customFilter) matched = applyCustomFilter(s.customFilter, matched);
+    const count = matched.length;
     html += `
       <div class="quick-card" onclick="App.runQuickSearch('${t}','${s.id}')">
         <div class="quick-card-icon">${s.icon}</div>
@@ -2838,7 +2930,8 @@ App.runQuickSearch = function(t, id){
   const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   const allRows = Store.getRows(srcTable);
   const storeCols = Store.getCols(srcTable);
-  const rows = allRows.filter(r => advMatchesCriteria(r, crit));
+  let rows = allRows.filter(r => advMatchesCriteria(r, crit));
+  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows);
 
   // Use only cols that exist in store
   const cols = s.cols.filter(c => storeCols.includes(c));
@@ -2912,7 +3005,8 @@ App.printQuickResult = function(id, t){
   const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   const allRows = Store.getRows(srcTable);
   const storeCols = Store.getCols(srcTable);
-  const rows = allRows.filter(r => advMatchesCriteria(r, crit));
+  let rows = allRows.filter(r => advMatchesCriteria(r, crit));
+  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows);
   if(rows.includes && rows.sort) rows.sort((a,b) => (a.Cognome||'').localeCompare(b.Cognome||''));
   const cols = s.cols.filter(c => storeCols.includes(c));
   const oggi = new Date().toLocaleDateString('it-IT');
@@ -2963,7 +3057,8 @@ App.exportQuickResult = function(id, t){
   const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   const allRows = Store.getRows(srcTable);
   const storeCols = Store.getCols(srcTable);
-  const rows = allRows.filter(r => advMatchesCriteria(r, crit));
+  let rows = allRows.filter(r => advMatchesCriteria(r, crit));
+  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows);
   const cols = s.cols.filter(c => storeCols.includes(c));
   const data=[cols,...rows.map(r=>cols.map(c=>r[c]||''))];
   const ws=XLSX.utils.aoa_to_sheet(data);
