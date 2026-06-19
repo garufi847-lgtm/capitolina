@@ -257,11 +257,17 @@ const Allegati = {
   // URL base API NAS - stessa della store
   base(){ return typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : ''; },
 
-  // Estrae tutti gli URL PDF da un valore di cella (possono essere multipli, separati da virgola)
+  // Estrae tutti gli URL PDF da un valore di cella (possono essere multipli, separati da virgola).
+  // IMPORTANTE: alcuni export QuintaDB contengono spazi NON codificati nei nomi file
+  // (es. "Attestato Agg. Formazione.pdf" invece di "Attestato%20Agg..."), quindi non si può
+  // usare una regex che si interrompe sugli spazi: dividiamo invece sul pattern
+  // ", http" (virgola seguita, dopo eventuali spazi, dall'inizio di un nuovo URL).
   _extractPdfUrls(cellValue){
-    const s = String(cellValue||'');
-    const matches = s.match(/https?:\/\/[^\s,]+\.pdf[^\s,]*/gi) || [];
-    return matches.map(u=>u.trim());
+    const s = String(cellValue||'').trim();
+    if(!s) return [];
+    return s.split(/,\s*(?=https?:\/\/)/i)
+      .map(p=>p.trim())
+      .filter(p=>/^https?:\/\//i.test(p) && /\.pdf/i.test(p));
   },
 
   // Durante l'import Excel: per ogni colonna nota con link PDF (vedi PDF_LINK_COLUMNS),
@@ -287,10 +293,16 @@ const Allegati = {
             headers:{'Content-Type':'application/json'},
             body: JSON.stringify({url, originalName})
           });
-          if(r.ok) ok++; else fail++;
+          if(r.ok){
+            ok++;
+          } else {
+            fail++;
+            const errBody = await r.text().catch(()=>'');
+            console.warn(`Allegati.importFromRow: FALLITO [${colName} / ${slot}] HTTP ${r.status} — ${originalName} — ${url}`, errBody);
+          }
         }catch(e){
-          console.warn('Allegati.importFromRow: errore download', url, e.message);
           fail++;
+          console.warn(`Allegati.importFromRow: ERRORE RETE [${colName} / ${slot}] — ${url}`, e.message);
         }
       }
     }
@@ -1912,6 +1924,7 @@ const App = {
 
     toast(`Download allegati PDF in corso (potrebbe richiedere qualche minuto)...`);
     let totalOk=0, totalFail=0, rowsWithLinks=0;
+    const failedRecords = [];
     for(const {row, rawRow} of pairs){
       const hasLink = Object.keys(PDF_LINK_COLUMNS[t]).some(col=>{
         const v=rawRow[col]; return v && Allegati._extractPdfUrls(v).length>0;
@@ -1921,9 +1934,17 @@ const App = {
       const result = await Allegati.importFromRow(t, rawRow, row._id);
       totalOk += result.ok||0;
       totalFail += result.fail||0;
+      if(result.fail>0){
+        const nome = `${rawRow['Cognome']||''} ${rawRow['Nome']||''}`.trim() || row._id;
+        failedRecords.push(`${nome} (${result.fail} falliti)`);
+      }
     }
     if(rowsWithLinks>0){
       toast(`Allegati importati: ${totalOk} ok${totalFail?`, ${totalFail} falliti`:''} (${rowsWithLinks} record con link)`, totalFail?'error':'success');
+      if(failedRecords.length){
+        console.warn('Record con almeno un allegato fallito:', failedRecords);
+        toast(`Allegati falliti per: ${failedRecords.slice(0,5).join(', ')}${failedRecords.length>5?` e altri ${failedRecords.length-5}`:''} — vedi console per dettagli`, 'error');
+      }
     }
   },
 
@@ -2879,8 +2900,25 @@ function applyCustomFilter(key, rows){
   if(key === 'cont_scadenza_30_proroga'){
     const now = new Date(); now.setHours(0,0,0,0);
     const lim30 = new Date(now); lim30.setDate(now.getDate()+30);
+
+    // Il campo "Stato Dipendente" copiato dentro Contratti può non essere sincronizzato
+    // con l'ultimo stato reale del dipendente (es. se è stato aggiornato solo in Dipendenti
+    // dopo l'import). Per sicurezza, verifichiamo lo stato AGGIORNATO leggendolo direttamente
+    // dalla tabella Dipendenti, incrociando per N° Socio.
+    const normalizeNSocio = s => String(s||'').trim().replace(',', '.').toUpperCase();
+    const dipendentiByNSocio = {};
+    Store.getRows('dipendenti').forEach(d=>{
+      const key = normalizeNSocio(d['N° Socio']);
+      if(key) dipendentiByNSocio[key] = d;
+    });
+
     return rows.filter(r=>{
-      if(String(r['Stato Dipendente']||'').trim().toUpperCase() !== 'ATTIVO') return false;
+      const nSocio = normalizeNSocio(r['Id Dipendente (N° Socio)']);
+      const dip = dipendentiByNSocio[nSocio];
+      // Stato reale: preferisci quello in Dipendenti se troviamo un match, altrimenti fallback su Contratti
+      const statoReale = dip ? dip['Stato Dipendente'] : r['Stato Dipendente'];
+      if(String(statoReale||'').trim().toUpperCase() !== 'ATTIVO') return false;
+
       const expiry = getEffectiveContractExpiry(r);
       if(!expiry) return false;
       return expiry >= now && expiry <= lim30;
