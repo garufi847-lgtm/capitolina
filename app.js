@@ -1972,9 +1972,26 @@ const App = {
     return row;
   },
 
+  // Validazione "intelligente" di una riga raw, prima del mapping. Oltre a scartare le righe
+  // completamente vuote, per Dipendenti richiede che Cognome o Nome siano compilati nei campi
+  // anagrafici principali — questo esclude le righe spurie/vuote che capitano negli export
+  // QuintaDB (es. righe placeholder per blocchi di sotto-tabelle annidate senza un dipendente reale).
+  _isValidImportRow(t, rawRow){
+    const hasAnyValue = Object.values(rawRow).some(v=>v!==null&&v!==undefined&&String(v).trim()!=='');
+    if(!hasAnyValue) return false;
+
+    if(t==='dipendenti'){
+      const cognome = String(rawRow['Cognome']||'').trim();
+      const nome = String(rawRow['Nome']||'').trim();
+      if(!cognome && !nome) return false;
+    }
+
+    return true;
+  },
+
   async _doReplace(t,rawRows){
-    // Salta righe completamente vuote
-    const validRows=rawRows.filter(r=>Object.values(r).some(v=>v!==null&&v!==undefined&&String(v).trim()!==''));
+    // Salta righe completamente vuote o "fantasma" (intestazioni ripetute per errore)
+    const validRows=rawRows.filter(r=>this._isValidImportRow(t,r));
     // Garantisce che le colonne non siano mai vuote (es. se il NAS non le aveva ancora inizializzate)
     if(!Store.data[t].columns || !Store.data[t].columns.length){
       Store.data[t].columns = JSON.parse(JSON.stringify(EMBEDDED_DATA[t].columns));
@@ -2006,7 +2023,7 @@ const App = {
   },
 
   async _doAppend(t,rawRows){
-    const validRows=rawRows.filter(r=>Object.values(r).some(v=>v!==null&&v!==undefined&&String(v).trim()!==''));
+    const validRows=rawRows.filter(r=>this._isValidImportRow(t,r));
     // Garantisce che le colonne non siano mai vuote (es. se il NAS non le aveva ancora inizializzate)
     if(!Store.data[t].columns || !Store.data[t].columns.length){
       Store.data[t].columns = JSON.parse(JSON.stringify(EMBEDDED_DATA[t].columns));
