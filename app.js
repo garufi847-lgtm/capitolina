@@ -489,12 +489,12 @@ const Allegati = {
 // ─── SEZIONI FORM PER TABELLA ─────────────────────────────────────────────────
 const SECTIONS = {
   dipendenti: [
-    {t:'👤 Dati Anagrafici',       c:['Cognome','Nome','Data di Nascita','Luogo di Nascita','Sesso','Cittadinanza','Cod. Fiscale']},
+    {t:'👤 Dati Anagrafici',       c:['Cognome','Nome','Data di Nascita','Luogo di Nascita','Sesso','Cittadinanza','Codice Fiscale']},
     {t:'🏠 Residenza',             c:['Indirizzo Residenza','Comune Residenza','CAP','Provincia Residenza']},
     {t:'📦 Domicilio',             c:['Domicilio diverso Residenza','Indirizzo Domicilio','Comune Domicilio','CAP domicilio','Provincia Domicilio']},
     {t:'📞 Contatti',              c:['Telefono Cellulare','Altro Recapito','Email']},
     {t:'🪪 Documento',             c:['Tipo Documento','N° Documento','Data Rilascio Documento','Scadenza Documento']},
-    {t:'🏢 Dati Lavorativi',       c:['Azienda','N° Socio','Stato Socio','Data Delibera Ammissione','Data Delibera Recesso / Esclusione','Stato Dipendente','Mansione','Appalto / sede di lavoro']},
+    {t:'🏢 Dati Associativi',      c:['Azienda','N° Socio','Stato Socio','Data Delibera Ammissione','Data Delibera Recesso / Esclusione','Appalto / sede di lavoro']},
     {t:'🌍 Permesso di Soggiorno', c:['Tipo permesso','Rilasciato da Questura','Data rilascio Permesso Soggiorno','Data scadenza Permesso Soggiorno','Note permesso']},
     {t:'📝 Note',                  c:['Note']},
   ],
@@ -997,10 +997,16 @@ const App = {
       }
     }
     for(const c of allCols){ if(!seen.has(c)){ ordered.push({c,sec:'📁 Altri campi'}); seen.add(c); } }
+    // In Dipendenti, Stato Dipendente e Mansione sono mostrati in sola lettura (sincronizzati
+    // da Contratti) dentro la sezione "Dati Associativi" — escludili dal fallback "Altri campi"
+    // per evitare un campo editabile duplicato e disallineato.
+    const orderedFiltered = (t==='dipendenti')
+      ? ordered.filter(o=>!(o.sec==='📁 Altri campi' && (o.c==='Stato Dipendente' || o.c==='Mansione')))
+      : ordered;
 
     // Group by section title
     const bySection={};
-    for(const {c,sec} of ordered){
+    for(const {c,sec} of orderedFiltered){
       if(!bySection[sec])bySection[sec]=[];
       bySection[sec].push(c);
     }
@@ -1012,6 +1018,21 @@ const App = {
         const def=FIELDS[c];
         const wide=def?.type==='radio'||def?.type==='textarea'||c.toLowerCase().includes('note')||c.toLowerCase().includes('indirizzo');
         html+=`<div class="form-group ${wide?'full':''}"><label class="field-label">${esc(c)}</label>${buildField(c,row?row[c]:'')}</div>`;
+      }
+      // In Dipendenti, dopo la sezione "Dati Associativi" mostra Stato Dipendente e Mansione
+      // in SOLA LETTURA, sincronizzati dal contratto di lavoro associato (tabella Contratti).
+      if(t==='dipendenti' && secTitle==='🏢 Dati Associativi'){
+        const nSocio = String(row?.['N° Socio']||'').trim();
+        const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+        const contrattoRow = nSocio ? Store.getRows('contratti').find(c=>
+          normalize(c['Id Dipendente (N° Socio)']) === normalize(nSocio)
+        ) : null;
+        const statoVal = contrattoRow?.['Stato Dipendente'] || '';
+        const mansioneVal = contrattoRow?.['Mansione'] || '';
+        html+=`<div class="form-group"><label class="field-label">Stato Dipendente <small style="color:#888">(da Contratti)</small></label>
+          <input type="text" value="${esc(statoVal)}" disabled style="background:#f3f4f6;color:#555;cursor:not-allowed"/></div>`;
+        html+=`<div class="form-group"><label class="field-label">Mansione <small style="color:#888">(da Contratti)</small></label>
+          <input type="text" value="${esc(mansioneVal)}" disabled style="background:#f3f4f6;color:#555;cursor:not-allowed"/></div>`;
       }
       html+='</div></div>';
     }
@@ -1057,6 +1078,13 @@ const App = {
     }
     const row={};
     for(const c of cols){
+      // In Dipendenti, Stato Dipendente e Mansione non sono più campi editabili nel form
+      // (sono mostrati in sola lettura, sincronizzati da Contratti) — preserva il valore
+      // esistente nel record invece di sovrascriverlo con una stringa vuota.
+      if(table==='dipendenti' && (c==='Stato Dipendente' || c==='Mansione')){
+        row[c] = (idx!==null ? Store.getRows(table)[idx]?.[c] : '') || '';
+        continue;
+      }
       try{
         const def=FIELDS[c];
         if(def?.type==='radio'){
