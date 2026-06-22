@@ -80,9 +80,45 @@ const Store = {
   },
   getRows(t){ return this.data[t]?.rows||[]; },
   getCols(t){ return this.data[t]?.columns||[]; },
-  addRow(t,row){ row._id=Date.now().toString(36)+Math.random().toString(36).slice(2); this.data[t].rows.push(row); this.save(t); },
-  updateRow(t,idx,row){ const id=this.data[t].rows[idx]?._id; this.data[t].rows[idx]={...row,_id:id}; this.save(t); },
-  deleteRow(t,idx){ this.data[t].rows.splice(idx,1); this.save(t); }
+  addRow(t,row){
+    row._id=Date.now().toString(36)+Math.random().toString(36).slice(2);
+    this.data[t].rows.push(row);
+    this.save(t);
+    if(t==='dipendenti') this._propagateDipendentiFields(row);
+  },
+  updateRow(t,idx,row){
+    const id=this.data[t].rows[idx]?._id;
+    this.data[t].rows[idx]={...row,_id:id};
+    this.save(t);
+    if(t==='dipendenti') this._propagateDipendentiFields(this.data[t].rows[idx]);
+  },
+  deleteRow(t,idx){ this.data[t].rows.splice(idx,1); this.save(t); },
+
+  // Propaga i campi anagrafici di base (Cognome, Nome, Azienda) da un dipendente verso
+  // i record già esistenti in Contratti, Formazione, Sorveglianza che hanno lo stesso N° Socio.
+  // Così se l'anagrafica viene aggiornata (es. import correttivo, cambio azienda), i dati
+  // duplicati nelle altre tabelle restano sempre coerenti senza doverli modificare a mano.
+  _propagateDipendentiFields(dipRow){
+    const nSocio = String(dipRow['N° Socio']||'').trim();
+    if(!nSocio) return;
+    const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+    const nSocioNorm = normalize(nSocio);
+
+    const fieldsToSync = { 'Cognome': dipRow['Cognome'], 'Nome': dipRow['Nome'], 'Azienda': dipRow['Azienda'] };
+
+    ['contratti','formazione','sorveglianza'].forEach(targetTable=>{
+      const rows = this.data[targetTable]?.rows;
+      if(!rows) return;
+      let changed = false;
+      rows.forEach(r=>{
+        if(normalize(r['Id Dipendente (N° Socio)']) !== nSocioNorm) return;
+        Object.entries(fieldsToSync).forEach(([field, val])=>{
+          if(val !== undefined && r[field] !== val){ r[field] = val; changed = true; }
+        });
+      });
+      if(changed) this.save(targetTable);
+    });
+  },
 };
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -1950,6 +1986,12 @@ const App = {
     });
     Store.data[t].rows = pairs.map(p=>p.row);
     Store.save(t);
+    // Se è un import di Dipendenti, propaga Cognome/Nome/Azienda ai record già esistenti
+    // in Contratti/Formazione/Sorveglianza collegati per N° Socio (vedi addRow/updateRow,
+    // qui bypassati per efficienza in import massivi).
+    if(t==='dipendenti'){
+      Store.getRows(t).forEach(row => Store._propagateDipendentiFields(row));
+    }
     const b=document.getElementById('badge-'+t); if(b)b.textContent=Store.getRows(t).length;
     if(this.table===t) this.renderTable(t);
     // Se siamo nella dashboard, aggiorna la dashboard
