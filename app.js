@@ -1094,10 +1094,18 @@ const App = {
     const row={};
     for(const c of cols){
       // In Dipendenti, Stato Dipendente e Mansione non sono più campi editabili nel form
-      // (sono mostrati in sola lettura, sincronizzati da Contratti) — preserva il valore
-      // esistente nel record invece di sovrascriverlo con una stringa vuota.
+      // (sono mostrati in sola lettura, sincronizzati da Contratti) — al salvataggio,
+      // scrivi nel record il valore REALE preso dal contratto associato (per N° Socio),
+      // così la colonna nella tabella resta sempre coerente, anche se prima era vuota.
       if(table==='dipendenti' && (c==='Stato Dipendente' || c==='Mansione')){
-        row[c] = (idx!==null ? Store.getRows(table)[idx]?.[c] : '') || '';
+        const nSocioEl = document.getElementById('ff_N__Socio'); // il campo N° Socio nel form, se presente
+        const nSocioVal = nSocioEl ? nSocioEl.value : (idx!==null ? Store.getRows(table)[idx]?.['N° Socio'] : '');
+        const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+        const contrattoRow = nSocioVal ? Store.getRows('contratti').find(cr=>
+          normalize(cr['Id Dipendente (N° Socio)']) === normalize(nSocioVal)
+        ) : null;
+        const fallback = idx!==null ? (Store.getRows(table)[idx]?.[c] || '') : '';
+        row[c] = (contrattoRow && contrattoRow[c]) || fallback;
         continue;
       }
       try{
