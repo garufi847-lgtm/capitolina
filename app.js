@@ -1941,8 +1941,8 @@ const App = {
       if(rawLower[lc]){ const v=rawRow[rawLower[lc]]; row[col]=String(v||'').trim(); continue; }
       // 3. Varianti note
       const aliases={
-        'n° socio':               ['n socio','n.socio','nsocio','numero socio','n° socio','matricola'],
-        'id dipendente (n° socio)':['id dipendente','id_dipendente','n° socio','n socio','matricola'],
+        'n° socio':               ['n socio','n.socio','nsocio','numero socio'],
+        'id dipendente (n° socio)':['id dipendente','id_dipendente','numero socio','n° socio','n socio'],
         'codice fiscale':         ['codice fiscale','codicefiscale','cf','cod. fiscale','cod fiscale'],
         'stato dipendente':       ['stato dipendente','stato_dipendente','stato','status dipendente','stato dip'],
         'stato dipendente':       ['stato dipendente','stato_dipendente'],
