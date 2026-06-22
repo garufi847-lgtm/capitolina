@@ -929,9 +929,24 @@ const App = {
 
   // ── VISUALIZZA DETTAGLIO ───────────────────────────────────────────────────
   openView(t, idx){
-    const row=Store.getRows(t)[idx];
+    let row=Store.getRows(t)[idx];
     const meta=TABLE_META[t];
     document.getElementById('modal-title').textContent='👁 Dettaglio — '+meta.label;
+
+    // In Dipendenti, sincronizza Stato Dipendente e Mansione dal contratto associato (per N° Socio).
+    // Usa una copia locale per la sola visualizzazione, senza modificare il record nello Store.
+    if(t==='dipendenti'){
+      const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+      const contrattoRow = Store.getRows('contratti').find(c=>
+        normalize(c['Id Dipendente (N° Socio)']) === normalize(row['N° Socio'])
+      );
+      if(contrattoRow){
+        row = {...row,
+          'Stato Dipendente': contrattoRow['Stato Dipendente'] || row['Stato Dipendente'],
+          'Mansione': contrattoRow['Mansione'] || row['Mansione'],
+        };
+      }
+    }
 
     const allCols=Store.getCols(t).filter(c=>!SKIP.has(c)&&c!=='_id');
     const secs=SECTIONS[t]||[{t:'Dati',c:allCols}];
@@ -2576,9 +2591,27 @@ App.renderTable = function(t){
   const ths=cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+
     `<th style="width:100px;cursor:pointer" onclick="App.sortCol=null;App.sortDir=1;App.renderTable('${t}')" title="Torna all'ordine di inserimento">
       ${!this.sortCol?'🕒 Inserimento':'↺'}</th>`;
+  // Per Dipendenti, Stato Dipendente e Mansione vengono sincronizzati dal contratto
+  // associato (per N° Socio) anche nella vista a elenco, non solo nel form di modifica.
+  const normalizeNSocioList = s => String(s||'').trim().replace(',', '.').toUpperCase();
+  let contrattiByNSocio = null;
+  if(t==='dipendenti'){
+    contrattiByNSocio = {};
+    Store.getRows('contratti').forEach(c=>{
+      const key = normalizeNSocioList(c['Id Dipendente (N° Socio)']);
+      if(key) contrattiByNSocio[key] = c;
+    });
+  }
   const trs=page.map(row=>{
     const oi=all.indexOf(row);
-    const tds=cols.map(c=>{const v=row[c]??'';return meta.status===c?'<td>'+pill(v)+'</td>':`<td title="${esc(v)}">${esc(v)}</td>`;}).join('');
+    const tds=cols.map(c=>{
+      let v=row[c]??'';
+      if(t==='dipendenti' && (c==='Stato Dipendente' || c==='Mansione')){
+        const contratto = contrattiByNSocio[normalizeNSocioList(row['N° Socio'])];
+        if(contratto) v = contratto[c] ?? v;
+      }
+      return meta.status===c?'<td>'+pill(v)+'</td>':`<td title="${esc(v)}">${esc(v)}</td>`;
+    }).join('');
     const actView=`<button class="icon-btn view" title="Visualizza" onclick="App.openView('${t}',${oi})">👁</button>`;
     const actMod=Auth.can('edit')?`<button class="icon-btn" title="Modifica" onclick="App.openEdit('${t}',${oi})">✎</button>`:'';
     const actDel=Auth.can('delete')?`<button class="icon-btn danger" title="Elimina" onclick="App.confirmDelete('${t}',${oi})">✕</button>`:'';
