@@ -1151,7 +1151,8 @@ const App = {
     }
 
     const allCols=Store.getCols(t).filter(c=>!SKIP.has(c)&&c!=='_id');
-    const secs=CustomLayout.get(t)||[{t:'Dati',c:allCols}];
+    const allSecs=CustomLayout.get(t)||[{t:'Dati',c:allCols}];
+    const secs=allSecs.filter(s=>!s.__hidden); // le sezioni nascoste non vengono mostrate
 
     let html='';
     for(const sec of secs){
@@ -1164,8 +1165,8 @@ const App = {
       }
       html+='</div></div>';
     }
-    // extra cols not in sections
-    const secCols=new Set(secs.flatMap(s=>s.c));
+    // extra cols not in sections (i campi nascosti contano come "noti", quindi non finiscono qui)
+    const secCols=new Set(allSecs.flatMap(s=>s.c));
     const extra=allCols.filter(c=>!secCols.has(c)&&row[c]);
     if(extra.length){
       html+='<div class="form-section"><div class="form-section-title">📁 Altri dati</div><div class="view-grid">';
@@ -1205,14 +1206,20 @@ const App = {
     const allCols=Store.getCols(t).filter(c=>!SKIP.has(c)&&c!=='_id');
     const secs=CustomLayout.get(t)||[{t:'Campi',c:allCols}];
 
+    // Insieme dei campi marcati come "nascosti" tramite l'editor di layout: non vengono
+    // mostrati nel modulo, ma restano nel dato salvato (vedi _formState.cols più sotto).
+    const hiddenFields=new Set(secs.filter(s=>s.__hidden).flatMap(s=>s.c));
+
     // Build an ordered list: first cols that appear in sections, then the rest
     const ordered=[];
     const seen=new Set();
     for(const sec of secs){
+      if(sec.__hidden) continue; // i campi nascosti non entrano nel rendering del form
       for(const c of sec.c){
         if(allCols.includes(c)&&!seen.has(c)){ ordered.push({c,sec:sec.t}); seen.add(c); }
       }
     }
+    secs.filter(s=>s.__hidden).forEach(s=>s.c.forEach(c=>seen.add(c))); // segna come "visti" senza renderizzarli
     for(const c of allCols){ if(!seen.has(c)){ ordered.push({c,sec:'📁 Altri campi'}); seen.add(c); } }
     // In Dipendenti, Stato Dipendente, Mansione, Data assunzione e Data fine rapporto sono
     // mostrati in sola lettura (sincronizzati da Contratti) dentro la sezione "Dati Associativi"
@@ -1311,7 +1318,17 @@ const App = {
       return;
     }
     const row={};
+    const hiddenLayoutFields = (() => {
+      const secs = CustomLayout.get(table) || [];
+      return new Set(secs.filter(s=>s.__hidden).flatMap(s=>s.c));
+    })();
     for(const c of cols){
+      // Campi nascosti tramite l'editor di layout: nessun input nel form, preserva il
+      // valore esistente nel record invece di sovrascriverlo con una stringa vuota.
+      if(hiddenLayoutFields.has(c)){
+        row[c] = idx!==null ? (Store.getRows(table)[idx]?.[c] ?? '') : '';
+        continue;
+      }
       // In Dipendenti, Stato Dipendente e Mansione non sono più campi editabili nel form
       // (sono mostrati in sola lettura, sincronizzati da Contratti) — al salvataggio,
       // scrivi nel record il valore REALE preso dal contratto associato (per N° Socio),
@@ -1995,19 +2012,29 @@ const App = {
 
     let html = `<div style="font-size:13px;color:var(--text2);margin-bottom:14px">
       Riordina i campi con le frecce, spostali tra sezioni con il menu, o crea nuove sezioni.
+      Usa 🚫 per nascondere un campo dal modulo (il dato resta salvato, semplicemente non si vede).
       Le modifiche si applicano al modulo di inserimento/modifica e alla vista dettaglio.
     </div>`;
 
-    sections.forEach((sec, si) => {
-      html += `<div class="form-section" style="margin-bottom:14px">
+    // Separa la sezione speciale "Campi Nascosti" (se esiste) dalle altre, per mostrarla
+    // sempre in fondo con uno stile visivo distinto.
+    const hiddenIdx = sections.findIndex(s=>s.__hidden);
+    const normalIndices = sections.map((s,i)=>i).filter(i=>i!==hiddenIdx);
+
+    const renderSection = (si) => {
+      const sec = sections[si];
+      const isHiddenSec = !!sec.__hidden;
+      html += `<div class="form-section" style="margin-bottom:14px;${isHiddenSec?'opacity:.75;background:repeating-linear-gradient(45deg,#fafafa,#fafafa 10px,#f3f4f6 10px,#f3f4f6 20px)':''}">
         <div class="form-section-title" style="display:flex;align-items:center;gap:8px;justify-content:space-between">
-          <input type="text" value="${esc(sec.t)}" data-sec-title="${si}"
-            onchange="App._layoutRenameSection(${si}, this.value)"
-            style="font-weight:700;border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px;flex:1"/>
+          ${isHiddenSec
+            ? `<span style="font-weight:700;font-size:13px;flex:1">🚫 Campi Nascosti <small style="color:#888;font-weight:400">(non compaiono nel modulo)</small></span>`
+            : `<input type="text" value="${esc(sec.t)}" data-sec-title="${si}"
+                onchange="App._layoutRenameSection(${si}, this.value)"
+                style="font-weight:700;border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px;flex:1"/>`}
           <div style="display:flex;gap:4px">
-            ${si>0?`<button class="icon-btn" title="Sposta sezione su" onclick="App._layoutMoveSection(${si},-1)">⬆</button>`:''}
-            ${si<sections.length-1?`<button class="icon-btn" title="Sposta sezione giù" onclick="App._layoutMoveSection(${si},1)">⬇</button>`:''}
-            ${sections.length>1?`<button class="icon-btn danger" title="Elimina sezione (i campi tornano in Non assegnati)" onclick="App._layoutDeleteSection(${si})">✕</button>`:''}
+            ${!isHiddenSec && normalIndices.indexOf(si)>0?`<button class="icon-btn" title="Sposta sezione su" onclick="App._layoutMoveSection(${si},-1)">⬆</button>`:''}
+            ${!isHiddenSec && normalIndices.indexOf(si)<normalIndices.length-1?`<button class="icon-btn" title="Sposta sezione giù" onclick="App._layoutMoveSection(${si},1)">⬇</button>`:''}
+            ${!isHiddenSec && sections.length>1?`<button class="icon-btn danger" title="Elimina sezione (i campi tornano in Non assegnati)" onclick="App._layoutDeleteSection(${si})">✕</button>`:''}
           </div>
         </div>
         <div style="padding:10px">`;
@@ -2016,20 +2043,26 @@ const App = {
         html += `<div style="color:var(--text3);font-size:12px;padding:6px 0">Nessun campo in questa sezione.</div>`;
       }
       sec.c.forEach((col, ci) => {
-        const otherSections = sections.map((s2,si2)=>({si2, t:s2.t})).filter(s2=>s2.si2!==si);
+        const otherSections = sections.map((s2,si2)=>({si2, t:s2.t})).filter(s2=>s2.si2!==si && !s2.t.startsWith('🚫'));
         html += `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-light)">
-          <span style="flex:1;font-size:13px">${esc(col)}</span>
-          <button class="icon-btn" title="Sposta su" ${ci===0?'disabled style="opacity:.3"':''} onclick="App._layoutMoveField(${si},${ci},-1)">⬆</button>
-          <button class="icon-btn" title="Sposta giù" ${ci===sec.c.length-1?'disabled style="opacity:.3"':''} onclick="App._layoutMoveField(${si},${ci},1)">⬇</button>
-          <select style="font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px"
-            onchange="App._layoutMoveFieldToSection(${si},${ci},this.value)">
-            <option value="">↔ Sposta in...</option>
-            ${otherSections.map(s2=>`<option value="${s2.si2}">${esc(s2.t)}</option>`).join('')}
-          </select>
+          <span style="flex:1;font-size:13px${isHiddenSec?';color:#999;text-decoration:line-through':''}">${esc(col)}</span>
+          ${isHiddenSec
+            ? `<button class="icon-btn" title="Mostra di nuovo questo campo" onclick="App._layoutUnhideField(${si},${ci})">👁 Mostra</button>`
+            : `<button class="icon-btn" title="Sposta su" ${ci===0?'disabled style="opacity:.3"':''} onclick="App._layoutMoveField(${si},${ci},-1)">⬆</button>
+               <button class="icon-btn" title="Sposta giù" ${ci===sec.c.length-1?'disabled style="opacity:.3"':''} onclick="App._layoutMoveField(${si},${ci},1)">⬇</button>
+               <select style="font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px"
+                 onchange="App._layoutMoveFieldToSection(${si},${ci},this.value)">
+                 <option value="">↔ Sposta in...</option>
+                 ${otherSections.map(s2=>`<option value="${s2.si2}">${esc(s2.t)}</option>`).join('')}
+               </select>
+               <button class="icon-btn danger" title="Nascondi questo campo" onclick="App._layoutHideField(${si},${ci})">🚫</button>`}
         </div>`;
       });
       html += `</div></div>`;
-    });
+    };
+
+    normalIndices.forEach(renderSection);
+    if(hiddenIdx>=0) renderSection(hiddenIdx);
 
     html += `<button class="btn btn-ghost" style="font-size:13px;width:100%" onclick="App._layoutAddSection()">+ Nuova sezione</button>`;
 
@@ -2055,6 +2088,25 @@ const App = {
     const sections = this._layoutEditState.sections;
     const [col] = sections[si].c.splice(ci,1);
     sections[targetSi].c.push(col);
+    this._renderLayoutEditor();
+  },
+
+  _layoutHideField(si, ci){
+    const sections = this._layoutEditState.sections;
+    const [col] = sections[si].c.splice(ci,1);
+    let hiddenSec = sections.find(s=>s.__hidden);
+    if(!hiddenSec){ hiddenSec = {t:'🚫 Campi Nascosti', c:[], __hidden:true}; sections.push(hiddenSec); }
+    hiddenSec.c.push(col);
+    this._renderLayoutEditor();
+  },
+
+  _layoutUnhideField(si, ci){
+    const sections = this._layoutEditState.sections;
+    const [col] = sections[si].c.splice(ci,1);
+    // Rimette il campo nella prima sezione "normale" disponibile (non nascosta)
+    let target = sections.find(s=>!s.__hidden);
+    if(!target){ target = {t:'Dati', c:[]}; sections.unshift(target); }
+    target.c.push(col);
     this._renderLayoutEditor();
   },
 
