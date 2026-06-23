@@ -457,6 +457,8 @@ const Allegati = {
         <span class="allegato-size">${this._size(f.size)}</span>
         <div class="allegato-actions">
           <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px"
+            onclick="Allegati.preview('${f.filename}','${esc(f.originalName)}')" title="Visualizza">👁 Anteprima</button>
+          <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px"
             onclick="Allegati.download('${f.filename}','${esc(f.originalName)}')">⬇ Scarica</button>
           <button class="btn btn-danger" style="font-size:12px;padding:5px 10px"
             onclick="Allegati.delete('${f.filename}','${recordId}','${slot}',${single},this)">✕</button>
@@ -522,6 +524,29 @@ const Allegati = {
     }
     // Ricarica lista
     this.openModal(table, recordId, {label:document.getElementById('modal-title').textContent, slot, single});
+  },
+
+  // Apre il PDF in una nuova tab per la visualizzazione diretta (senza scaricarlo).
+  async preview(filename, origName){
+    const base = this.base();
+    if(base){
+      const url = `${base}/files/preview/${encodeURIComponent(filename)}`;
+      window.open(url, '_blank');
+    } else {
+      // Modalità locale: i PDF sono salvati come base64 in localStorage. I data URL
+      // con tipo application/pdf vengono mostrati inline dal browser quando aperti
+      // direttamente in una nuova tab (senza attributo download).
+      const allKeys = Object.keys(localStorage).filter(k=>k.startsWith('allegati_'));
+      for(const k of allKeys){
+        const files = JSON.parse(localStorage.getItem(k)||'[]');
+        const f = files.find(x=>x.filename===filename);
+        if(f&&f.data){
+          window.open(f.data, '_blank');
+          return;
+        }
+      }
+      toast('File non trovato','error');
+    }
   },
 
   async download(filename, origName){
@@ -2538,12 +2563,14 @@ let _advCriteria = [];
 
 App.advCriteria = [];
 App.advCustomFilterKey = null;
+App.advCompanyFilter = null;
 
 App.openAdvSearch = function(t){
   _advTable = t;
   _advRowCount = 0;
   App.advCriteria = [];
   App.advCustomFilterKey = null;
+App.advCompanyFilter = null;
 
   document.getElementById('modal-title').textContent = '🔍 Ricerca Avanzata — '+TABLE_META[t].label;
   document.getElementById('modal-body').innerHTML = `
@@ -2725,6 +2752,7 @@ App.applyAdvSearch = function(){
 App.resetAdvFilters = function(){
   App.advCriteria = [];
   App.advCustomFilterKey = null;
+App.advCompanyFilter = null;
   App.filter = '';
   document.getElementById('search-input').value = '';
   document.getElementById('adv-rows').innerHTML = '';
@@ -2837,7 +2865,7 @@ App.renderTable = function(t){
     rows=rows.filter(r=>advMatchesCriteria(r, this.advCriteria));
   }
   if(this.advCustomFilterKey){
-    rows=applyCustomFilter(this.advCustomFilterKey, rows);
+    rows=applyCustomFilter(this.advCustomFilterKey, rows, this.advCompanyFilter);
   }
   if(this.sortCol){
     const sc=this.sortCol, sd=this.sortDir;
@@ -2864,7 +2892,7 @@ App.renderTable = function(t){
 
   const advCount=(this.advCriteria?this.advCriteria.length:0) + (this.advCustomFilterKey?1:0);
   const advBadge=advCount?`<span style="background:var(--accent);color:#fff;border-radius:12px;padding:1px 8px;font-size:11px;margin-left:4px">${advCount} filtri</span>`:'';
-  const resetBtn=advCount?`<button class="btn btn-ghost" style="font-size:12px;color:var(--danger)" onclick="App.advCriteria=[];App.advCustomFilterKey=null;App.renderTable('${t}')">✕ Rimuovi filtri</button>`:'';
+  const resetBtn=advCount?`<button class="btn btn-ghost" style="font-size:12px;color:var(--danger)" onclick="App.advCriteria=[];App.advCustomFilterKey=null;App.advCompanyFilter=null;App.renderTable('${t}')">✕ Rimuovi filtri</button>`:'';
 
   const ths=cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+
     `<th style="width:100px;cursor:pointer" onclick="App.sortCol=null;App.sortDir=1;App.renderTable('${t}')" title="Torna all'ordine di inserimento">
@@ -2930,6 +2958,37 @@ App.renderTable = function(t){
 };
 
 // ─── RICERCHE RAPIDE ──────────────────────────────────────────────────────────
+
+// Elenco aziende con etichetta breve, usato per generare automaticamente una ricerca
+// rapida per ogni singola azienda (oltre alla versione "Tutte le aziende" già esistente).
+const COMPANIES = [
+  { value:'ALIANTE Soc. Coop.',          short:'ALIANTE' },
+  { value:'CAPITOLINA LOGISTICA Scarl',  short:'CAPITOLINA LOGISTICA' },
+  { value:'FIPAM  Scarl',                short:'FIPAM' },
+  { value:'SERIAM Scarl',                short:'SERIAM' },
+  { value:'CONSORZIO CAPITOLINA Srl',    short:'CONSORZIO CAPITOLINA' },
+  { value:'SNA Servizi & Management Srl',short:'SNA' },
+  { value:"SOCIETA' CESTINO",            short:'CESTINO' },
+];
+
+// Genera le varianti per-azienda di una ricerca rapida "base": stessa configurazione,
+// ma con un criterio aggiuntivo che filtra per una singola azienda. L'id, la label e la
+// descrizione vengono prefissati col nome breve dell'azienda per distinguerle a colpo d'occhio.
+function perCompanyVariants(base){
+  return COMPANIES.map(({value, short}) => ({
+    ...base,
+    id: `${base.id}_${short.toLowerCase().replace(/[^a-z0-9]/g,'_')}`,
+    label: `${short} — ${base.label}`,
+    desc: `${base.desc} (${short})`,
+    criteria: base.criteria ? [
+      ...base.criteria,
+      { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:value, val2:'', connector:'AND' },
+    ] : base.criteria,
+    // Se la ricerca usa un customFilter, lo manteniamo identico ma aggiungiamo il filtro azienda
+    // come ulteriore step applicato dopo (vedi applyCustomFilter, che lo gestisce per nome chiave).
+    _companyFilter: base.customFilter ? value : undefined,
+  }));
+}
 
 const QUICK_SEARCHES = {
   dipendenti: [
@@ -3094,125 +3153,143 @@ const QUICK_SEARCHES = {
       ]
     },
   ],
-  formazione: [
-    {
-      id:'form_scadenza_mese', icon:'📅',
-      label:'Scadenzario Formazione — Mese Corrente e Prossimo',
-      desc:'Corsi con scadenza nei prossimi 60 giorni',
-      table:'formazione',
-      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Stato Dipendente','Mansione','Appalto / sede di lavoro','Tipologia Corso','Scadenza Corso','Stato Corso'],
-      criteria:[
-        {field:'Scadenza Corso', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
-        {field:'Stato Corso',    fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND'},
-      ]
-    },
-    {
-      id:'form_corso_base', icon:'📅',
-      label:'Scadenzario Corso Base — Mese Corrente e Prossimo',
-      desc:'Corso Base in scadenza nei prossimi 60 giorni',
-      table:'formazione',
-      cols:['Cognome','Nome','Mansione','Stato Dipendente','Appalto / sede di lavoro','Tipologia Corso','Scadenza Corso','Azienda'],
-      criteria:[
-        {field:'Tipologia Corso', fieldDef:{type:'select'}, op:'is', val1:'Corso Base', val2:'', connector:'AND'},
-        {field:'Scadenza Corso',  fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
-      ]
-    },
-    {
-      id:'form_da_completare', icon:'⏳',
-      label:'Formazione Da Completare',
-      desc:'Corsi con stato "Da completare"',
-      table:'formazione',
-      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'],
-      criteria:[
-        {field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Da completare', val2:'', connector:'AND'},
-      ]
-    },
-    {
-      id:'form_scaduti', icon:'🔴',
-      label:'Formazione Scaduta',
-      desc:'Corsi con scadenza già passata',
-      table:'formazione',
-      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Scadenza Corso','Stato Corso'],
-      criteria:[
-        {field:'Scadenza Corso', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND'},
-        {field:'Stato Corso',    fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND'},
-      ]
-    },
-  ],
-  sorveglianza: [
-    {
-      id:'sorv_scadenza_mese', icon:'📅',
-      label:'Scadenze Idoneità — Mese Corrente e Prossimo',
-      desc:'Visite con scadenza nei prossimi 60 giorni',
-      table:'sorveglianza',
-      cols:['Azienda','Cognome','Nome','Mansione','Appalto / sede di lavoro','Data assunzione','Scadenza Idoneità','Stato idoneità','Data Analisi','Note'],
-      criteria:[
-        {field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
-      ]
-    },
-    {
-      id:'sorv_scaduti', icon:'🔴',
-      label:'Idoneità Scaduta',
-      desc:'Dipendenti con scadenza idoneità già passata',
-      table:'sorveglianza',
-      cols:['Azienda','Cognome','Nome','Mansione','Scadenza Idoneità','Stato idoneità','Medico'],
-      criteria:[
-        {field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND'},
-      ]
-    },
-    {
-      id:'sorv_prescrizioni', icon:'🟡',
-      label:'Idonei con Prescrizioni',
-      desc:'Dipendenti con prescrizioni mediche',
-      table:'sorveglianza',
-      cols:['Azienda','Cognome','Nome','Mansione','Scadenza Idoneità','Stato idoneità','Note prescrizione','Medico'],
-      criteria:[
-        {field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'prescrizioni', val2:'', connector:'AND'},
-      ]
-    },
-    {
-      id:'sorv_in_attesa', icon:'🔵',
-      label:'In Attesa di Visita',
-      desc:'Dipendenti in attesa di visita medica',
-      table:'sorveglianza',
-      cols:['Azienda','Cognome','Nome','Mansione','Data visita medica','Scadenza Idoneità','Stato idoneità'],
-      criteria:[
-        {field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'attesa', val2:'', connector:'AND'},
-      ]
-    },
-  ],
-  contratti: [
-    {
-      id:'cont_scadenza_30', icon:'📅',
-      label:'Contratti in Scadenza — Prossimi 30 Giorni',
-      desc:'Contratti a tempo determinato in scadenza (considerando l\'ultima proroga) — solo dipendenti ATTIVI',
-      table:'contratti',
-      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Data inizio','Scadenza Contratto','Data Proroga 1','Data Proroga 2','Data Proroga 3','Data Proroga 4','Mansione'],
-      criteria:[], // gestito da customFilter
-      customFilter: 'cont_scadenza_30_proroga',
-    },
-    {
-      id:'cont_indeterminato', icon:'✅',
-      label:'Contratti Tempo Indeterminato Attivi',
-      desc:'Tutti i contratti a tempo indeterminato',
-      table:'contratti',
-      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Data inizio','Mansione'],
-      criteria:[
-        {field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Tempo indeterminato', val2:'', connector:'AND'},
-        {field:'Stato Dipendente',       fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',              val2:'', connector:'AND'},
-      ]
-    },
-    {
-      id:'cont_intermittente', icon:'🔄',
-      label:'Contratti Intermittenti',
-      desc:'Tutti i contratti di lavoro intermittente',
-      table:'contratti',
-      cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Data inizio'],
-      criteria:[
-        {field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Lavoro intermittente', val2:'', connector:'AND'},
-      ]
-    },
-  ],
+  formazione: (() => {
+    const bases = [
+      {
+        id:'form_scadenza_mese', icon:'📅',
+        label:'Scadenzario Formazione — Mese Corrente e Prossimo',
+        desc:'Corsi con scadenza nei prossimi 60 giorni',
+        table:'formazione',
+        cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Stato Dipendente','Mansione','Appalto / sede di lavoro','Tipologia Corso','Scadenza Corso','Stato Corso'],
+        criteria:[
+          {field:'Scadenza Corso', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
+          {field:'Stato Corso',    fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND'},
+        ]
+      },
+      {
+        id:'form_corso_base', icon:'📅',
+        label:'Scadenzario Corso Base — Mese Corrente e Prossimo',
+        desc:'Corso Base in scadenza nei prossimi 60 giorni',
+        table:'formazione',
+        cols:['Cognome','Nome','Mansione','Stato Dipendente','Appalto / sede di lavoro','Tipologia Corso','Scadenza Corso','Azienda'],
+        criteria:[
+          {field:'Tipologia Corso', fieldDef:{type:'select'}, op:'is', val1:'Corso Base', val2:'', connector:'AND'},
+          {field:'Scadenza Corso',  fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
+        ]
+      },
+      {
+        id:'form_da_completare', icon:'⏳',
+        label:'Formazione Da Completare',
+        desc:'Corsi con stato "Da completare"',
+        table:'formazione',
+        cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'],
+        criteria:[
+          {field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Da completare', val2:'', connector:'AND'},
+        ]
+      },
+      {
+        id:'form_scaduti', icon:'🔴',
+        label:'Formazione Scaduta',
+        desc:'Corsi con scadenza già passata',
+        table:'formazione',
+        cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Scadenza Corso','Stato Corso'],
+        criteria:[
+          {field:'Scadenza Corso', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND'},
+          {field:'Stato Corso',    fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND'},
+        ]
+      },
+    ];
+    return bases.flatMap(b => [
+      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:b.desc+' (tutte le aziende)' },
+      ...perCompanyVariants(b),
+    ]);
+  })(),
+  sorveglianza: (() => {
+    const bases = [
+      {
+        id:'sorv_scadenza_mese', icon:'📅',
+        label:'Scadenze Idoneità — Mese Corrente e Prossimo',
+        desc:'Visite con scadenza nei prossimi 60 giorni',
+        table:'sorveglianza',
+        cols:['Azienda','Cognome','Nome','Mansione','Appalto / sede di lavoro','Data assunzione','Scadenza Idoneità','Stato idoneità','Data Analisi','Note'],
+        criteria:[
+          {field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
+        ]
+      },
+      {
+        id:'sorv_scaduti', icon:'🔴',
+        label:'Idoneità Scaduta',
+        desc:'Dipendenti con scadenza idoneità già passata',
+        table:'sorveglianza',
+        cols:['Azienda','Cognome','Nome','Mansione','Scadenza Idoneità','Stato idoneità','Medico'],
+        criteria:[
+          {field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND'},
+        ]
+      },
+      {
+        id:'sorv_prescrizioni', icon:'🟡',
+        label:'Idonei con Prescrizioni',
+        desc:'Dipendenti con prescrizioni mediche',
+        table:'sorveglianza',
+        cols:['Azienda','Cognome','Nome','Mansione','Scadenza Idoneità','Stato idoneità','Note prescrizione','Medico'],
+        criteria:[
+          {field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'prescrizioni', val2:'', connector:'AND'},
+        ]
+      },
+      {
+        id:'sorv_in_attesa', icon:'🔵',
+        label:'In Attesa di Visita',
+        desc:'Dipendenti in attesa di visita medica',
+        table:'sorveglianza',
+        cols:['Azienda','Cognome','Nome','Mansione','Data visita medica','Scadenza Idoneità','Stato idoneità'],
+        criteria:[
+          {field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'attesa', val2:'', connector:'AND'},
+        ]
+      },
+    ];
+    return bases.flatMap(b => [
+      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:b.desc+' (tutte le aziende)' },
+      ...perCompanyVariants(b),
+    ]);
+  })(),
+  contratti: (() => {
+    const bases = [
+      {
+        id:'cont_scadenza_30', icon:'📅',
+        label:'Contratti in Scadenza — Prossimi 30 Giorni',
+        desc:'Contratti a tempo determinato in scadenza (considerando l\'ultima proroga) — solo dipendenti ATTIVI',
+        table:'contratti',
+        cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Data inizio','Scadenza Contratto','Data Proroga 1','Data Proroga 2','Data Proroga 3','Data Proroga 4','Mansione'],
+        criteria:[], // gestito da customFilter
+        customFilter: 'cont_scadenza_30_proroga',
+      },
+      {
+        id:'cont_indeterminato', icon:'✅',
+        label:'Contratti Tempo Indeterminato Attivi',
+        desc:'Tutti i contratti a tempo indeterminato',
+        table:'contratti',
+        cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Data inizio','Mansione'],
+        criteria:[
+          {field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Tempo indeterminato', val2:'', connector:'AND'},
+          {field:'Stato Dipendente',       fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',              val2:'', connector:'AND'},
+        ]
+      },
+      {
+        id:'cont_intermittente', icon:'🔄',
+        label:'Contratti Intermittenti',
+        desc:'Tutti i contratti di lavoro intermittente',
+        table:'contratti',
+        cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Data inizio'],
+        criteria:[
+          {field:'Tipologia contrattuale', fieldDef:{type:'select'}, op:'is', val1:'Lavoro intermittente', val2:'', connector:'AND'},
+        ]
+      },
+    ];
+    return bases.flatMap(b => [
+      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:b.desc+' (tutte le aziende)' },
+      ...perCompanyVariants(b),
+    ]);
+  })(),
   aziende:[],
 };
 
@@ -3246,18 +3323,23 @@ function getEffectiveContractExpiry(row){
 
 // Filtri custom: usati quando la logica non è esprimibile con i criteri standard campo/operatore
 // (es. richiede un calcolo su più colonne, come la data di scadenza effettiva con proroghe)
-function applyCustomFilter(key, rows){
+function applyCustomFilter(key, rows, companyFilter){
+  let result = rows;
   if(key === 'cont_scadenza_30_proroga'){
     const now = new Date(); now.setHours(0,0,0,0);
     const lim30 = new Date(now); lim30.setDate(now.getDate()+30);
-    return rows.filter(r=>{
+    result = rows.filter(r=>{
       if(String(r['Stato Dipendente']||'').trim().toUpperCase() !== 'ATTIVO') return false;
       const expiry = getEffectiveContractExpiry(r);
       if(!expiry) return false;
       return expiry >= now && expiry <= lim30;
     });
   }
-  return rows;
+  // Filtro azienda aggiuntivo per le varianti per-singola-azienda di ricerche con customFilter
+  if(companyFilter){
+    result = result.filter(r => r['Azienda'] === companyFilter);
+  }
+  return result;
 }
 
 // ── Quick search modal ────────────────────────────────────────────────────────
@@ -3273,7 +3355,7 @@ App.openQuickSearches = function(t){
     const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
     const srcRows = Store.getRows(s.table || t);
     let matched = srcRows.filter(r => advMatchesCriteria(r, crit));
-    if(s.customFilter) matched = applyCustomFilter(s.customFilter, matched);
+    if(s.customFilter) matched = applyCustomFilter(s.customFilter, matched, s._companyFilter);
     const count = matched.length;
     html += `
       <div class="quick-card" onclick="App.runQuickSearch('${t}','${s.id}')">
@@ -3302,7 +3384,7 @@ App.runQuickSearch = function(t, id){
   const allRows = Store.getRows(srcTable);
   const storeCols = Store.getCols(srcTable);
   let rows = allRows.filter(r => advMatchesCriteria(r, crit));
-  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows);
+  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
 
   // Use only cols that exist in store
   const cols = s.cols.filter(c => storeCols.includes(c));
@@ -3360,6 +3442,7 @@ App.applyQuickFilter = function(t, id){
   if(!s) return;
   App.advCriteria = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   App.advCustomFilterKey = s.customFilter || null;
+  App.advCompanyFilter = s._companyFilter || null;
   App.filter = '';
   document.getElementById('search-input').value = '';
   App.page = 1;
@@ -3378,7 +3461,7 @@ App.printQuickResult = function(id, t){
   const allRows = Store.getRows(srcTable);
   const storeCols = Store.getCols(srcTable);
   let rows = allRows.filter(r => advMatchesCriteria(r, crit));
-  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows);
+  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
   if(rows.includes && rows.sort) rows.sort((a,b) => (a.Cognome||'').localeCompare(b.Cognome||''));
   const cols = s.cols.filter(c => storeCols.includes(c));
   const oggi = new Date().toLocaleDateString('it-IT');
@@ -3430,7 +3513,7 @@ App.exportQuickResult = function(id, t){
   const allRows = Store.getRows(srcTable);
   const storeCols = Store.getCols(srcTable);
   let rows = allRows.filter(r => advMatchesCriteria(r, crit));
-  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows);
+  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
   const cols = s.cols.filter(c => storeCols.includes(c));
   const data=[cols,...rows.map(r=>cols.map(c=>r[c]||''))];
   const ws=XLSX.utils.aoa_to_sheet(data);
