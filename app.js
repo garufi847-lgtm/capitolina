@@ -656,6 +656,76 @@ const TABLE_META = {
   aziende:      {label:'Anagrafica Aziende',     cols:['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO'], status:null},
 };
 
+// ─── LAYOUT PERSONALIZZATO (solo admin) ────────────────────────────────────────
+// Permette di riordinare i campi e spostarli tra sezioni, per ciascuna tabella.
+// La configurazione personalizzata viene salvata in localStorage (e sincronizzata
+// sul NAS se configurato) e sovrascrive a runtime la struttura di default SECTIONS.
+const CustomLayout = {
+  _cache: {},
+  base(){ return typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : ''; },
+
+  async load(t){
+    if(this._cache[t]) return this._cache[t];
+    const base = this.base();
+    if(base){
+      try{
+        const r = await fetch(`${base}/api/layout_${t}`);
+        if(r.ok){
+          const data = await r.json();
+          if(data && Array.isArray(data.sections) && data.sections.length){
+            this._cache[t] = data.sections;
+            localStorage.setItem('layout_'+t, JSON.stringify(data.sections));
+            return data.sections;
+          }
+        }
+      }catch(e){ console.warn('CustomLayout.load: NAS non raggiungibile, uso locale', e.message); }
+    }
+    const local = localStorage.getItem('layout_'+t);
+    if(local){
+      try{ this._cache[t] = JSON.parse(local); return this._cache[t]; }catch{}
+    }
+    return null; // nessuna personalizzazione: usa il default SECTIONS[t]
+  },
+
+  async save(t, sections){
+    this._cache[t] = sections;
+    localStorage.setItem('layout_'+t, JSON.stringify(sections));
+    const base = this.base();
+    if(base){
+      try{
+        await fetch(`${base}/api/layout_${t}`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({sections})
+        });
+      }catch(e){ console.warn('CustomLayout.save: sync NAS fallita', e.message); }
+    }
+  },
+
+  async reset(t){
+    this._cache[t] = null;
+    localStorage.removeItem('layout_'+t);
+    const base = this.base();
+    if(base){
+      try{
+        await fetch(`${base}/api/layout_${t}`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({sections:[]})
+        });
+      }catch(e){ console.warn('CustomLayout.reset: sync NAS fallita', e.message); }
+    }
+  },
+
+  // Ritorna la struttura sezioni da usare per la tabella t: quella personalizzata se
+  // presente in cache, altrimenti il default SECTIONS[t]. Da chiamare DOPO load(t) almeno
+  // una volta (es. al boot dell'app), altrimenti ritorna sempre il default alla prima vista.
+  get(t){
+    return this._cache[t] && this._cache[t].length ? this._cache[t] : (SECTIONS[t]||null);
+  },
+};
+
+
 const SKIP = new Set(['_id','Riepilogo Dipendente','Riepilogo Dati contrattuali','Riepilogo Formazione',
   'Riepilogo Sorveglianza Sanitaria','Allegati documenti permesso','Allegati formazione (Attestati)',
   'Allegati aggiornamento formazione','Attestato Idoneità ','UNILAV ASSUNZIONE','UNILAV PROROGHE',
@@ -1081,7 +1151,7 @@ const App = {
     }
 
     const allCols=Store.getCols(t).filter(c=>!SKIP.has(c)&&c!=='_id');
-    const secs=SECTIONS[t]||[{t:'Dati',c:allCols}];
+    const secs=CustomLayout.get(t)||[{t:'Dati',c:allCols}];
 
     let html='';
     for(const sec of secs){
@@ -1133,7 +1203,7 @@ const App = {
 
     // Only use cols that actually exist in the store
     const allCols=Store.getCols(t).filter(c=>!SKIP.has(c)&&c!=='_id');
-    const secs=SECTIONS[t]||[{t:'Campi',c:allCols}];
+    const secs=CustomLayout.get(t)||[{t:'Campi',c:allCols}];
 
     // Build an ordered list: first cols that appear in sections, then the rest
     const ordered=[];
@@ -1897,6 +1967,139 @@ const App = {
     }
   },
 
+  // ── Editor Layout Personalizzato (solo admin) ─────────────────────────────────
+  _layoutEditState: null, // {table, sections: [{t, c:[...]}]}
+
+  openLayoutEditor(t){
+    if(!Auth.isAdmin()){ toast('Funzione riservata agli amministratori','error'); return; }
+    const allCols = Store.getCols(t).filter(c=>!SKIP.has(c)&&c!=='_id');
+    const currentSecs = CustomLayout.get(t) || [{t:'Dati', c:allCols}];
+    // Copia profonda di lavoro, includendo anche eventuali campi non ancora assegnati a nessuna sezione
+    const usedCols = new Set(currentSecs.flatMap(s=>s.c));
+    const unassigned = allCols.filter(c=>!usedCols.has(c));
+    const workingSecs = currentSecs.map(s=>({t:s.t, c:[...s.c]}));
+    if(unassigned.length) workingSecs.push({t:'📁 Non assegnati', c:unassigned});
+
+    this._layoutEditState = { table:t, sections:workingSecs };
+    this._renderLayoutEditor();
+    App.openModal();
+  },
+
+  _renderLayoutEditor(){
+    const { table, sections } = this._layoutEditState;
+    document.getElementById('modal-title').textContent = `🧩 Personalizza Layout — ${TABLE_META[table].label}`;
+
+    let html = `<div style="font-size:13px;color:var(--text2);margin-bottom:14px">
+      Riordina i campi con le frecce, spostali tra sezioni con il menu, o crea nuove sezioni.
+      Le modifiche si applicano al modulo di inserimento/modifica e alla vista dettaglio.
+    </div>`;
+
+    sections.forEach((sec, si) => {
+      html += `<div class="form-section" style="margin-bottom:14px">
+        <div class="form-section-title" style="display:flex;align-items:center;gap:8px;justify-content:space-between">
+          <input type="text" value="${esc(sec.t)}" data-sec-title="${si}"
+            onchange="App._layoutRenameSection(${si}, this.value)"
+            style="font-weight:700;border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px;flex:1"/>
+          <div style="display:flex;gap:4px">
+            ${si>0?`<button class="icon-btn" title="Sposta sezione su" onclick="App._layoutMoveSection(${si},-1)">⬆</button>`:''}
+            ${si<sections.length-1?`<button class="icon-btn" title="Sposta sezione giù" onclick="App._layoutMoveSection(${si},1)">⬇</button>`:''}
+            ${sections.length>1?`<button class="icon-btn danger" title="Elimina sezione (i campi tornano in Non assegnati)" onclick="App._layoutDeleteSection(${si})">✕</button>`:''}
+          </div>
+        </div>
+        <div style="padding:10px">`;
+
+      if(!sec.c.length){
+        html += `<div style="color:var(--text3);font-size:12px;padding:6px 0">Nessun campo in questa sezione.</div>`;
+      }
+      sec.c.forEach((col, ci) => {
+        const otherSections = sections.map((s2,si2)=>({si2, t:s2.t})).filter(s2=>s2.si2!==si);
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-light)">
+          <span style="flex:1;font-size:13px">${esc(col)}</span>
+          <button class="icon-btn" title="Sposta su" ${ci===0?'disabled style="opacity:.3"':''} onclick="App._layoutMoveField(${si},${ci},-1)">⬆</button>
+          <button class="icon-btn" title="Sposta giù" ${ci===sec.c.length-1?'disabled style="opacity:.3"':''} onclick="App._layoutMoveField(${si},${ci},1)">⬇</button>
+          <select style="font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px"
+            onchange="App._layoutMoveFieldToSection(${si},${ci},this.value)">
+            <option value="">↔ Sposta in...</option>
+            ${otherSections.map(s2=>`<option value="${s2.si2}">${esc(s2.t)}</option>`).join('')}
+          </select>
+        </div>`;
+      });
+      html += `</div></div>`;
+    });
+
+    html += `<button class="btn btn-ghost" style="font-size:13px;width:100%" onclick="App._layoutAddSection()">+ Nuova sezione</button>`;
+
+    document.getElementById('modal-body').innerHTML = html;
+    document.getElementById('modal-footer').innerHTML = `
+      <button class="btn btn-ghost" style="color:var(--danger)" onclick="App._layoutResetDefault()">↺ Ripristina default</button>
+      <span style="flex:1"></span>
+      <button class="btn btn-ghost" onclick="App.closeModal()">Annulla</button>
+      <button class="btn btn-primary" onclick="App._layoutSave()">💾 Salva Layout</button>`;
+  },
+
+  _layoutMoveField(si, ci, dir){
+    const sec = this._layoutEditState.sections[si];
+    const newCi = ci+dir;
+    if(newCi<0 || newCi>=sec.c.length) return;
+    [sec.c[ci], sec.c[newCi]] = [sec.c[newCi], sec.c[ci]];
+    this._renderLayoutEditor();
+  },
+
+  _layoutMoveFieldToSection(si, ci, targetSiStr){
+    if(targetSiStr===''){ this._renderLayoutEditor(); return; }
+    const targetSi = parseInt(targetSiStr,10);
+    const sections = this._layoutEditState.sections;
+    const [col] = sections[si].c.splice(ci,1);
+    sections[targetSi].c.push(col);
+    this._renderLayoutEditor();
+  },
+
+  _layoutMoveSection(si, dir){
+    const sections = this._layoutEditState.sections;
+    const newSi = si+dir;
+    if(newSi<0 || newSi>=sections.length) return;
+    [sections[si], sections[newSi]] = [sections[newSi], sections[si]];
+    this._renderLayoutEditor();
+  },
+
+  _layoutRenameSection(si, newTitle){
+    this._layoutEditState.sections[si].t = newTitle;
+  },
+
+  _layoutDeleteSection(si){
+    const sections = this._layoutEditState.sections;
+    const removed = sections.splice(si,1)[0];
+    // I campi della sezione eliminata tornano in "Non assegnati" (creandola se non esiste)
+    let unassignedSec = sections.find(s=>s.t==='📁 Non assegnati');
+    if(!unassignedSec){ unassignedSec = {t:'📁 Non assegnati', c:[]}; sections.push(unassignedSec); }
+    unassignedSec.c.push(...removed.c);
+    this._renderLayoutEditor();
+  },
+
+  _layoutAddSection(){
+    this._layoutEditState.sections.push({t:'Nuova Sezione', c:[]});
+    this._renderLayoutEditor();
+  },
+
+  async _layoutSave(){
+    const { table, sections } = this._layoutEditState;
+    // Rimuove le sezioni rimaste vuote (es. "Non assegnati" se tutto è stato spostato altrove)
+    const finalSections = sections.filter(s=>s.c.length>0);
+    await CustomLayout.save(table, finalSections);
+    toast('Layout salvato ✓');
+    this.closeModal();
+    if(this.table===table) this.renderTable(table);
+  },
+
+  async _layoutResetDefault(){
+    if(!confirm('Ripristinare il layout originale per questa tabella? La personalizzazione attuale verrà eliminata.')) return;
+    const { table } = this._layoutEditState;
+    await CustomLayout.reset(table);
+    toast('Layout ripristinato al default');
+    this.closeModal();
+    if(this.table===table) this.renderTable(table);
+  },
+
   importGestionale(){
     const base = typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : '';
 
@@ -2417,6 +2620,7 @@ window.addEventListener('keydown',e=>App.handleKey(e));
 ['login-user','login-pass'].forEach(id=>document.getElementById(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')App.login();}));
 (async()=>{
   try{ await Store.load(); }catch(e){ console.error('Store error:',e); }
+  try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','aziende'].map(t=>CustomLayout.load(t))); }catch(e){ console.warn('CustomLayout boot load error:',e); }
   document.getElementById('loading').classList.add('hidden');
   const _sess=Auth.current();
   if(_sess){ document.getElementById('login-screen').style.display='none'; App.initApp(_sess); }
@@ -2944,6 +3148,7 @@ App.renderTable = function(t){
         ${Auth.can('import')?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>`:''}
         ${Auth.can('print')?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.printTable('${t}')">🖨 Stampa</button>`:''}
         ${Auth.can('clear_table')?`<button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.clearTable('${t}')">🗑 Svuota</button>`:''}
+        ${Auth.isAdmin()?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.openLayoutEditor('${t}')" title="Personalizza l'ordine e la posizione dei campi (solo admin)">🧩 Personalizza Layout</button>`:''}
       </div>
       <div class="table-scroll"><table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>
       <div class="pagination">
