@@ -85,12 +85,14 @@ const Store = {
     this.data[t].rows.push(row);
     this.save(t);
     if(t==='dipendenti') this._propagateDipendentiFields(row);
+    if(['contratti','formazione','sorveglianza'].includes(t)) this._ensureDipendenteExists(row);
   },
   updateRow(t,idx,row){
     const id=this.data[t].rows[idx]?._id;
     this.data[t].rows[idx]={...row,_id:id};
     this.save(t);
     if(t==='dipendenti') this._propagateDipendentiFields(this.data[t].rows[idx]);
+    if(['contratti','formazione','sorveglianza'].includes(t)) this._ensureDipendenteExists(this.data[t].rows[idx]);
   },
   deleteRow(t,idx){ this.data[t].rows.splice(idx,1); this.save(t); },
 
@@ -118,6 +120,30 @@ const Store = {
       });
       if(changed) this.save(targetTable);
     });
+  },
+
+  // Direzione INVERSA: quando si importa/salva un record in Contratti, Formazione o
+  // Sorveglianza, verifica se esiste già un Dipendente con lo stesso N° Socio. Se manca,
+  // lo crea automaticamente (con i dati anagrafici disponibili: Cognome, Nome, Azienda,
+  // N° Socio) così la tabella Dipendenti resta sempre completa indipendentemente
+  // dall'ordine in cui si importano i file.
+  _ensureDipendenteExists(sourceRow){
+    const nSocioRaw = String(sourceRow['Id Dipendente (N° Socio)']||'').trim();
+    if(!nSocioRaw) return;
+    const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+    const nSocioNorm = normalize(nSocioRaw);
+
+    const dipRows = this.data['dipendenti']?.rows;
+    if(!dipRows) return;
+    const exists = dipRows.some(d => normalize(d['N° Socio']) === nSocioNorm);
+    if(exists) return;
+
+    if(!this.data['dipendenti'].columns || !this.data['dipendenti'].columns.length){
+      this.data['dipendenti'].columns = JSON.parse(JSON.stringify(EMBEDDED_DATA['dipendenti'].columns));
+    }
+    const newDip = { 'N° Socio': nSocioRaw, 'Cognome': sourceRow['Cognome']||'', 'Nome': sourceRow['Nome']||'', 'Azienda': sourceRow['Azienda']||'' };
+    this.addRow('dipendenti', newDip);
+    console.log('_ensureDipendenteExists: creato nuovo dipendente per N° Socio', nSocioRaw);
   },
 };
 
@@ -2085,6 +2111,11 @@ const App = {
     // qui bypassati per efficienza in import massivi).
     if(t==='dipendenti'){
       Store.getRows(t).forEach(row => Store._propagateDipendentiFields(row));
+    }
+    // Direzione inversa: se è un import di Contratti/Formazione/Sorveglianza, crea
+    // automaticamente in Dipendenti i record mancanti per N° Socio non ancora presenti.
+    if(['contratti','formazione','sorveglianza'].includes(t)){
+      Store.getRows(t).forEach(row => Store._ensureDipendenteExists(row));
     }
     const b=document.getElementById('badge-'+t); if(b)b.textContent=Store.getRows(t).length;
     if(this.table===t) this.renderTable(t);
