@@ -272,20 +272,62 @@ const PDF_LINK_COLUMNS = {
   },
 };
 
-// Il file "Scheda Anagrafica Dipendenti" esportato da QuintaDB contiene anche un blocco
-// di colonne ANNIDATE senza intestazione propria ("Riepilogo Dati contrattuali", seguito
-// da 25 sotto-colonne senza nome: __EMPTY_1, __EMPTY_2 ecc.) con un riepilogo del contratto
-// corrente del dipendente, inclusi gli stessi link PDF UNILAV già presenti nel file Contratti.
-// Questo blocco serve come FALLBACK: se durante l'import di Contratti un link non era presente,
-// proviamo a recuperarlo da qui, associandolo al contratto giusto tramite N° Socio.
-// Offset relativo (0-based) dall'inizio del blocco "Riepilogo Dati contrattuali" allo slot:
-const NESTED_CONTRATTI_BLOCK = {
-  startColumn: 'Riepilogo Dati contrattuali', // prima colonna del blocco nel file Dipendenti
-  endColumn:   'Rilasciato da Questura',      // prima colonna DOPO il blocco (usata per delimitarlo)
-  offsets: {
-    12: 'unilav_ass', // UNILAV Assunzione (confermato sui dati reali)
-    // Altri offset (proroghe/trasformazioni/cessazioni) non risultano popolati negli export
-    // analizzati; se in futuro si trovano valori, aggiungere qui: es. 24:'unilav_pro' ecc.
+// Il file "Scheda Anagrafica Dipendenti" esportato da QuintaDB contiene anche 3 blocchi
+// di colonne ANNIDATE senza intestazione propria (Riepilogo Dati contrattuali, Riepilogo
+// Formazione, Riepilogo Sorveglianza Sanitaria), ognuno con un riepilogo dell'ultimo record
+// collegato di quella tabella. NOTA IMPORTANTE: QuintaDB lascia spesso, in queste colonne,
+// il NOME del campo come testo placeholder invece del valore reale (es. la cella contiene
+// letteralmente "Tipologia contrattuale" invece di "Tempo determinato"). Quando però il dato
+// è stato effettivamente compilato, il valore reale sostituisce quel placeholder. Per questo,
+// durante l'estrazione, ogni valore che coincide esattamente con l'etichetta della propria
+// colonna viene scartato come "non compilato", e solo i valori realmente diversi vengono usati
+// per creare/aggiornare i record in Contratti, Formazione e Sorveglianza.
+const NESTED_BLOCKS = {
+  contratti: {
+    startColumn: 'Riepilogo Dati contrattuali',
+    endColumn:   'Rilasciato da Questura',
+    // offset relativo (0-based) → {campo: nome colonna reale in Contratti, label: etichetta placeholder attesa}
+    fields: {
+      0:  { field:'Id Dipendente (N° Socio)', label:'Numero Socio' },
+      5:  { field:'Data Assunzione',          label:'Data Assunzione' },
+      7:  { field:'Livello',                  label:'Livello' },
+      8:  { field:'Tipologia contrattuale',   label:'Tipologia contrattuale' },
+      9:  { field:'Tipologia orario contrattuale', label:'Tipologia orario contrattuale' },
+      10: { field:'Ore contrattuali settimanali',  label:'Ore contrattuali settimanali' },
+      11: { field:'Scadenza Contratto',       label:'Scadenza Contratto' },
+      13: { field:'Requisiti Incentivi',      label:'Requisiti Incentivi' },
+      14: { field:'Data Proroga 1',           label:'Data Proroga 1' },
+      15: { field:'Data Proroga 2',           label:'Data Proroga 2' },
+      16: { field:'Data Proroga 3',           label:'Data Proroga 3' },
+      17: { field:'Data Proroga 4',           label:'Data Proroga 4' },
+      19: { field:'Note',                     label:'Note' },
+      22: { field:'Data fine rapporto',       label:'Data fine rapporto' },
+      23: { field:'Causa fine rapporto',      label:'Causa fine rapporto' },
+    },
+    attachmentOffsets: { 12:'unilav_ass', 20:'unilav_pro', 21:'unilav_tra', 24:'unilav_ces' },
+  },
+  formazione: {
+    startColumn: 'Riepilogo Formazione',
+    endColumn:   'Riepilogo Sorveglianza Sanitaria',
+    fields: {
+      0: { field:'Id Dipendente (N° Socio)', label:'Id Dipendente (N° Socio)' },
+      5: { field:'Tipologia Corso',          label:'Tipologia Corso' },
+      6: { field:'Data Corso',               label:'Data Corso' },
+      7: { field:'Scadenza Corso',           label:'Scadenza Corso' },
+      10:{ field:'Note',                     label:'Note' },
+    },
+    attachmentOffsets: { 8:'formazione', 9:'agg_formazione' },
+  },
+  sorveglianza: {
+    startColumn: 'Riepilogo Sorveglianza Sanitaria',
+    endColumn:   null, // ultimo blocco: si estende fino alla fine della riga
+    fields: {
+      0: { field:'Id Dipendente (N° Socio)', label:'Id Dipendente (N° Socio)' },
+      5: { field:'Data visita medica',       label:'Data visita medica' },
+      6: { field:'Scadenza Idoneità',        label:'Scadenza Idoneità' },
+      7: { field:'Stato idoneità',           label:'Stato idoneità' },
+    },
+    attachmentOffsets: {}, // l'Attestato Idoneità viene gestito separatamente (colonna dedicata)
   },
 };
 
@@ -1214,9 +1256,44 @@ const App = {
   confirmDelete(t,idx){
     const row=Store.getRows(t)[idx];
     const name=Object.values(row).find(v=>v&&String(v).trim()&&v!=='_id')||'questo record';
+
+    // Per Dipendenti: conta quanti record collegati verrebbero eliminati a cascata
+    // in Contratti, Formazione, Sorveglianza (stesso N° Socio), per avvisare l'utente.
+    let cascadeMsg = '';
+    if(t==='dipendenti'){
+      const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+      const nSocioNorm = normalize(row['N° Socio']);
+      if(nSocioNorm){
+        const counts = ['contratti','formazione','sorveglianza'].map(tt=>{
+          const n = Store.getRows(tt).filter(r=>normalize(r['Id Dipendente (N° Socio)'])===nSocioNorm).length;
+          return {tt, n};
+        }).filter(c=>c.n>0);
+        if(counts.length){
+          const labels = {contratti:'Contratti', formazione:'Formazione', sorveglianza:'Sorveglianza Sanitaria'};
+          cascadeMsg = ' Verranno eliminati anche ' + counts.map(c=>`${c.n} record in ${labels[c.tt]}`).join(', ') + '.';
+        }
+      }
+    }
+
     document.getElementById('confirm-title').textContent='Elimina record';
-    document.getElementById('confirm-msg').textContent=`Eliminare "${String(name).slice(0,70)}"? Operazione non reversibile.`;
+    document.getElementById('confirm-msg').textContent=`Eliminare "${String(name).slice(0,70)}"? Operazione non reversibile.${cascadeMsg}`;
     document.getElementById('confirm-ok').onclick=()=>{
+      // Cascata: se elimino un dipendente, elimino anche i record collegati nelle altre tabelle
+      if(t==='dipendenti'){
+        const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+        const nSocioNorm = normalize(row['N° Socio']);
+        if(nSocioNorm){
+          ['contratti','formazione','sorveglianza'].forEach(tt=>{
+            const rows = Store.getRows(tt);
+            const toRemove = [];
+            rows.forEach((r,i)=>{ if(normalize(r['Id Dipendente (N° Socio)'])===nSocioNorm) toRemove.push(i); });
+            // Rimuove dal fondo per non sballare gli indici durante lo splice
+            toRemove.sort((a,b)=>b-a).forEach(i=>Store.deleteRow(tt,i));
+            const b=document.getElementById('badge-'+tt); if(b) b.textContent=Store.getRows(tt).length;
+            if(this.table===tt) this.renderTable(tt);
+          });
+        }
+      }
       Store.deleteRow(t,idx);
       toast('Record eliminato','error');
       const b=document.getElementById('badge-'+t);if(b)b.textContent=Store.getRows(t).length;
@@ -2017,9 +2094,9 @@ const App = {
     // Scarica e allega i PDF collegati nel vecchio sistema (se il NAS è configurato e ci sono link)
     await this._importAttachmentsForRows(t, pairs);
 
-    // Caso speciale: il file Dipendenti contiene anche un riepilogo annidato dei contratti
-    // con eventuali link PDF (es. UNILAV Assunzione) usati come fallback/recupero.
-    if(t==='dipendenti') await this._importNestedContrattiAttachments(pairs);
+    // Estrae dai blocchi annidati (Riepilogo Contratti/Formazione/Sorveglianza) i dati reali
+    // e crea/aggiorna i record corrispondenti in quelle tabelle, scaricando anche gli allegati.
+    if(t==='dipendenti') await this._syncNestedTablesFromDipendenti(rawRows, pairs);
   },
 
   async _doAppend(t,rawRows){
@@ -2039,7 +2116,7 @@ const App = {
 
     await this._importAttachmentsForRows(t, pairs);
 
-    if(t==='dipendenti') await this._importNestedContrattiAttachments(pairs);
+    if(t==='dipendenti') await this._syncNestedTablesFromDipendenti(rawRows, pairs);
   },
 
   // Per ogni riga importata, scarica eventuali PDF collegati (vecchi link QuintaDB) e li allega.
@@ -2082,85 +2159,151 @@ const App = {
     }
   },
 
-  // Caso speciale: il file "Scheda Anagrafica Dipendenti" contiene un blocco annidato
-  // ("Riepilogo Dati contrattuali") con un riepilogo del contratto corrente, inclusi
-  // eventuali link PDF (es. UNILAV Assunzione). Questa funzione recupera quei link e li
-  // allega al CONTRATTO corrispondente (trovato per N° Socio), non al dipendente stesso.
-  // Va eseguita DOPO aver importato sia Contratti che Dipendenti.
-  async _importNestedContrattiAttachments(dipendentiPairs){
-    if(!Allegati.base()){ console.log('_importNestedContrattiAttachments: NAS non configurato, salto'); return; }
-    const { startColumn, endColumn, offsets } = NESTED_CONTRATTI_BLOCK;
-    if(!Object.keys(offsets).length) return;
+  // Estrae dai blocchi annidati del file "Scheda Anagrafica Dipendenti" (Riepilogo Dati
+  // contrattuali, Riepilogo Formazione, Riepilogo Sorveglianza Sanitaria) i dati REALI
+  // (quando compilati — QuintaDB a volte lascia solo l'etichetta del campo come placeholder)
+  // e li usa per CREARE un nuovo record o AGGIORNARE quello esistente nella tabella
+  // corrispondente (Contratti, Formazione, Sorveglianza), incrociando per N° Socio.
+  // Scarica anche gli eventuali PDF collegati come allegati. Va eseguita dopo aver importato
+  // i Dipendenti (così il blocco annidato di ogni riga è disponibile per l'estrazione).
+  // IMPORTANTE: nel file "Scheda Anagrafica Dipendenti", il blocco annidato con i dati REALI
+  // di Contratti/Formazione/Sorveglianza non si trova nella stessa riga del dipendente, ma
+  // nella riga IMMEDIATAMENTE SUCCESSIVA (una riga "fantasma" senza Cognome/Nome, che porta
+  // solo questi dati aggiuntivi). Questa funzione scorre l'array originale (non filtrato) per
+  // ricostruire questa associazione, poi crea/aggiorna i record nelle tabelle corrispondenti.
+  async _syncNestedTablesFromDipendenti(rawRows, dipendentiPairs){
+    const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+    const hasNas = !!Allegati.base();
 
-    let totalOk=0, totalFail=0, rowsProcessed=0;
-    let debugNoStartCol=0, debugNoEndCol=0, debugNoSocio=0, debugNoMatch=0, debugChecked=0;
+    // Mappa N° Socio (normalizzato) → _id del dipendente appena importato (per riferimento)
+    const idByNSocio = {};
+    dipendentiPairs.forEach(({row})=>{
+      const ns = normalize(row['N° Socio']);
+      if(ns) idByNSocio[ns] = row._id;
+    });
 
-    for(const {rawRow} of dipendentiPairs){
-      debugChecked++;
-      const keys = Object.keys(rawRow);
-      const startIdx = keys.indexOf(startColumn);
-      const endIdx = keys.indexOf(endColumn);
-      if(startIdx===-1){ debugNoStartCol++; continue; }
-      if(endIdx===-1 || endIdx<=startIdx){ debugNoEndCol++; continue; }
+    // Costruisce le coppie (rigaDipendente, rigaDatiAnnidati) scorrendo l'array originale:
+    // ogni riga con Cognome/Nome è un dipendente; se la riga successiva non ha Cognome/Nome,
+    // si presume porti i dati annidati reali per quel dipendente.
+    const employeeDataPairs = [];
+    for(let i=0; i<rawRows.length; i++){
+      const r = rawRows[i];
+      const hasIdentity = String(r['Cognome']||'').trim() || String(r['Nome']||'').trim();
+      if(!hasIdentity) continue;
+      const next = rawRows[i+1];
+      const nextIsDataRow = next && !String(next['Cognome']||'').trim() && !String(next['Nome']||'').trim();
+      employeeDataPairs.push({ employeeRow: r, dataRow: nextIsDataRow ? next : r });
+    }
 
-      // Trova il N° Socio nel blocco annidato (prima colonna del blocco, offset 0)
-      const nSocioNested = String(rawRow[keys[startIdx]]||'').trim();
-      if(!nSocioNested){ debugNoSocio++; continue; }
-      // Normalizza: nei file reali capita sia "0159.LO" che, per errore di digitazione
-      // originale in QuintaDB, "2324,AL" (virgola invece di punto)
-      const normalize = s => s.trim().replace(',', '.').toUpperCase();
-      const nSocioNestedNorm = normalize(nSocioNested);
+    let summary = { contratti:{created:0,updated:0}, formazione:{created:0,updated:0}, sorveglianza:{created:0,updated:0} };
+    let attachOk=0, attachFail=0;
 
-      // Trova il contratto corrispondente già importato, tramite N° Socio
-      const contrattoRow = Store.getRows('contratti').find(c=>
-        normalize(String(c['Id Dipendente (N° Socio)']||c['N° Socio']||'')) === nSocioNestedNorm
-      );
-      if(!contrattoRow){ debugNoMatch++; continue; }
+    for(const targetTable of ['contratti','formazione','sorveglianza']){
+      const blockCfg = NESTED_BLOCKS[targetTable];
+      let tableChanged = false;
 
-      let rowHadLink=false;
-      for(const [offsetStr, slot] of Object.entries(offsets)){
-        const offset = parseInt(offsetStr,10);
-        const colIdx = startIdx + offset;
-        if(colIdx>=endIdx) continue;
-        const cellValue = rawRow[keys[colIdx]];
-        if(!cellValue || !String(cellValue).trim()) continue;
-        const urls = Allegati._extractPdfUrls(cellValue);
-        if(!urls.length) continue;
-        rowHadLink = true;
-        for(const url of urls){
-          try{
-            const originalName = decodeURIComponent(url.split('/').pop()||'allegato.pdf');
-            const r = await fetch(`${Allegati.base()}/files/import-from-url/${contrattoRow._id}/${slot}`, {
-              method:'POST',
-              headers:{'Content-Type':'application/json'},
-              body: JSON.stringify({url, originalName})
-            });
-            if(r.ok) totalOk++; else totalFail++;
-          }catch(e){
-            console.warn('_importNestedContrattiAttachments: errore download', url, e.message);
-            totalFail++;
+      for(const {employeeRow, dataRow} of employeeDataPairs){
+        const keys = Object.keys(dataRow);
+        const startIdx = keys.indexOf(blockCfg.startColumn);
+        if(startIdx===-1) continue;
+        const endIdx = blockCfg.endColumn ? keys.indexOf(blockCfg.endColumn) : keys.length;
+        if(blockCfg.endColumn && (endIdx===-1 || endIdx<=startIdx)) continue;
+
+        // N° Socio è sempre il primo campo del blocco (offset 0). Se manca o è solo il
+        // placeholder, usa il N° Socio del dipendente (riga principale) come fallback.
+        let nSocioRaw = String(dataRow[keys[startIdx]]||'').trim();
+        if(!nSocioRaw || nSocioRaw === blockCfg.fields[0]?.label){
+          nSocioRaw = String(employeeRow['N° Socio']||'').trim();
+        }
+        if(!nSocioRaw) continue;
+        const nSocioNorm = normalize(nSocioRaw);
+
+        // Estrae i campi testuali reali (scarta i placeholder identici all'etichetta)
+        const extracted = {};
+        let hasAnyRealField = false;
+        for(const [offsetStr, cfg] of Object.entries(blockCfg.fields)){
+          const offset = parseInt(offsetStr,10);
+          const colIdx = startIdx + offset;
+          if(colIdx>=endIdx) continue;
+          const raw = String(dataRow[keys[colIdx]]||'').trim();
+          if(!raw || raw === cfg.label) continue; // non compilato: resta il placeholder o è vuoto
+          extracted[cfg.field] = raw;
+          if(cfg.field !== 'Id Dipendente (N° Socio)') hasAnyRealField = true;
+        }
+        if(!hasAnyRealField) continue; // nessun dato reale per questo dipendente in questa tabella
+
+        // Trova il record esistente per N° Socio, o prepara la creazione di uno nuovo
+        const existingIdx = Store.getRows(targetTable).findIndex(r=>
+          normalize(r['Id Dipendente (N° Socio)']) === nSocioNorm
+        );
+
+        if(existingIdx >= 0){
+          const existing = Store.getRows(targetTable)[existingIdx];
+          const merged = {...existing, ...extracted};
+          merged['Cognome'] = employeeRow['Cognome'] || merged['Cognome'];
+          merged['Nome'] = employeeRow['Nome'] || merged['Nome'];
+          merged['Azienda'] = employeeRow['Azienda'] || merged['Azienda'];
+          Store.data[targetTable].rows[existingIdx] = merged;
+          summary[targetTable].updated++;
+        } else {
+          const newRow = {
+            'Id Dipendente (N° Socio)': nSocioRaw,
+            'Cognome': employeeRow['Cognome']||'',
+            'Nome': employeeRow['Nome']||'',
+            'Azienda': employeeRow['Azienda']||'',
+            ...extracted,
+          };
+          newRow._id = Date.now().toString(36)+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2,5);
+          Store.data[targetTable].rows.push(newRow);
+          summary[targetTable].created++;
+        }
+        tableChanged = true;
+
+        // Scarica eventuali PDF collegati per questo blocco, se il NAS è configurato
+        if(hasNas && Object.keys(blockCfg.attachmentOffsets).length){
+          const recordIdx = existingIdx >= 0 ? existingIdx : Store.data[targetTable].rows.length - 1;
+          const recordId = Store.data[targetTable].rows[recordIdx]._id;
+          for(const [offsetStr, slot] of Object.entries(blockCfg.attachmentOffsets)){
+            const colIdx = startIdx + parseInt(offsetStr,10);
+            if(colIdx>=endIdx) continue;
+            const cellValue = dataRow[keys[colIdx]];
+            if(!cellValue || !String(cellValue).trim()) continue;
+            const urls = Allegati._extractPdfUrls(cellValue);
+            for(const url of urls){
+              try{
+                const originalName = decodeURIComponent(url.split('/').pop()||'allegato.pdf');
+                const r = await fetch(`${Allegati.base()}/files/import-from-url/${recordId}/${slot}`, {
+                  method:'POST',
+                  headers:{'Content-Type':'application/json'},
+                  body: JSON.stringify({url, originalName})
+                });
+                if(r.ok) attachOk++; else attachFail++;
+              }catch(e){
+                console.warn('_syncNestedTablesFromDipendenti: errore download allegato', url, e.message);
+                attachFail++;
+              }
+            }
           }
         }
       }
-      if(rowHadLink) rowsProcessed++;
+
+      if(tableChanged) Store.save(targetTable);
     }
 
-    console.log('_importNestedContrattiAttachments DEBUG:', {
-      righeControllate: debugChecked,
-      senzaColonnaInizio: debugNoStartCol,
-      senzaColonnaFine: debugNoEndCol,
-      senzaNSocio: debugNoSocio,
-      nessunContrattoTrovato: debugNoMatch,
-      righeConLinkProcessate: rowsProcessed,
-      totalOk, totalFail
+    // Aggiorna i badge e la tabella visibile, se serve
+    ['contratti','formazione','sorveglianza'].forEach(t=>{
+      const b=document.getElementById('badge-'+t); if(b) b.textContent=Store.getRows(t).length;
+      if(App.table===t) App.renderTable(t);
     });
 
-    if(rowsProcessed>0){
-      toast(`Allegati contratti recuperati da Dipendenti: ${totalOk} ok${totalFail?`, ${totalFail} falliti`:''} (${rowsProcessed} record)`, totalFail?'error':'success');
-    } else if(debugNoStartCol === debugChecked && debugChecked>0){
-      toast(`Recupero allegati da Dipendenti: nessun blocco "Riepilogo Dati contrattuali" trovato nel file (controlla la console per dettagli)`, 'error');
-    } else if(debugNoMatch>0 && debugNoMatch===debugChecked-debugNoStartCol-debugNoEndCol-debugNoSocio){
-      toast(`Recupero allegati da Dipendenti: trovati link ma nessun contratto corrispondente per N° Socio (controlla la console)`, 'error');
+    const totalCreated = summary.contratti.created+summary.formazione.created+summary.sorveglianza.created;
+    const totalUpdated = summary.contratti.updated+summary.formazione.updated+summary.sorveglianza.updated;
+    if(totalCreated || totalUpdated){
+      toast(`Sincronizzazione da Dipendenti: Contratti +${summary.contratti.created}/~${summary.contratti.updated}, `+
+            `Formazione +${summary.formazione.created}/~${summary.formazione.updated}, `+
+            `Sorveglianza +${summary.sorveglianza.created}/~${summary.sorveglianza.updated}`+
+            `${attachOk||attachFail?` — Allegati: ${attachOk} ok${attachFail?`, ${attachFail} falliti`:''}`:''}`,
+            'success');
     }
   },
 
@@ -2170,14 +2313,27 @@ const App = {
 
   // ── SVUOTA TABELLA ────────────────────────────────────────────────────────────
   clearTable(t){
+    const cascadeWarning = t==='dipendenti'
+      ? ' Verranno svuotate anche le tabelle Contratti, Formazione e Sorveglianza Sanitaria.'
+      : '';
     document.getElementById('confirm-title').textContent='⚠ Svuota tabella';
     document.getElementById('confirm-msg').textContent=
-      `Sei sicuro di voler eliminare TUTTI i ${Store.getRows(t).length} record di "${TABLE_META[t].label}"? Operazione irreversibile.`;
+      `Sei sicuro di voler eliminare TUTTI i ${Store.getRows(t).length} record di "${TABLE_META[t].label}"? Operazione irreversibile.${cascadeWarning}`;
     document.getElementById('confirm-ok').textContent='Svuota tutto';
     document.getElementById('confirm-ok').className='btn btn-danger';
     document.getElementById('confirm-ok').onclick=()=>{
       Store.data[t].rows=[];
       Store.save(t);
+      // Cascata: svuotando Dipendenti, svuota anche le tabelle collegate (sarebbero
+      // record orfani senza nessun dipendente a cui appartenere)
+      if(t==='dipendenti'){
+        ['contratti','formazione','sorveglianza'].forEach(tt=>{
+          Store.data[tt].rows=[];
+          Store.save(tt);
+          const b=document.getElementById('badge-'+tt); if(b) b.textContent=0;
+          if(this.table===tt) this.renderTable(tt);
+        });
+      }
       const b=document.getElementById('badge-'+t); if(b)b.textContent=0;
       this.closeConfirm();
       document.getElementById('confirm-ok').textContent='Elimina';
