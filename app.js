@@ -1228,41 +1228,45 @@ const App = {
       bySection[sec].push(c);
     }
 
+    // In Dipendenti, Stato Dipendente, Mansione, Data assunzione e Data fine rapporto sono
+    // mostrati in sola lettura, sincronizzati dal contratto di lavoro associato (tabella
+    // Contratti). Calcolati una volta sola, e applicati ovunque questi campi compaiano nel
+    // layout (anche se l'admin li ha spostati con l'editor di layout in un'altra sezione).
+    const SYNCED_READONLY_FIELDS = new Set(['Stato Dipendente','Mansione','Data assunzione','Data fine rapporto']);
+    let syncedValues = {};
+    if(t==='dipendenti'){
+      const nSocio = String(row?.['N° Socio']||'').trim();
+      const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+      const contrattoRow = nSocio ? Store.getRows('contratti').find(c=>
+        normalize(c['Id Dipendente (N° Socio)']) === normalize(nSocio)
+      ) : null;
+      // Normalizza DD-MM-YYYY / DD/MM/YYYY → YYYY-MM-DD per l'input type="date"
+      const toDateInputVal = v => {
+        v = String(v||'');
+        if(/^\d{2}[\/\-]\d{2}[\/\-]\d{4}$/.test(v)){ const p=v.split(/[\/\-]/); return p[2]+'-'+p[1]+'-'+p[0]; }
+        return v;
+      };
+      syncedValues = {
+        'Stato Dipendente': contrattoRow?.['Stato Dipendente'] || '',
+        'Mansione': contrattoRow?.['Mansione'] || '',
+        'Data assunzione': toDateInputVal(contrattoRow?.['Data Assunzione'] || contrattoRow?.['Data assunzione'] || ''),
+        'Data fine rapporto': toDateInputVal(contrattoRow?.['Data fine rapporto'] || ''),
+      };
+    }
+
     let html='';
     for(const [secTitle,cols] of Object.entries(bySection)){
       html+=`<div class="form-section"><div class="form-section-title">${secTitle}</div><div class="form-grid">`;
       for(const c of cols){
+        if(t==='dipendenti' && SYNCED_READONLY_FIELDS.has(c)){
+          const inputType = (c==='Data assunzione' || c==='Data fine rapporto') ? 'date' : 'text';
+          html+=`<div class="form-group"><label class="field-label">${esc(c)} <small style="color:#888">(da Contratti)</small></label>
+            <input type="${inputType}" value="${esc(syncedValues[c])}" disabled style="background:#f3f4f6;color:#555;cursor:not-allowed"/></div>`;
+          continue;
+        }
         const def=FIELDS[c];
         const wide=def?.type==='radio'||def?.type==='textarea'||c.toLowerCase().includes('note')||c.toLowerCase().includes('indirizzo');
         html+=`<div class="form-group ${wide?'full':''}"><label class="field-label">${esc(c)}</label>${buildField(c,row?row[c]:'')}</div>`;
-      }
-      // In Dipendenti, dopo la sezione "Dati Associativi" mostra Stato Dipendente, Mansione,
-      // Data assunzione e Data fine rapporto in SOLA LETTURA, sincronizzati dal contratto
-      // di lavoro associato (tabella Contratti).
-      if(t==='dipendenti' && secTitle==='🏢 Dati Associativi'){
-        const nSocio = String(row?.['N° Socio']||'').trim();
-        const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
-        const contrattoRow = nSocio ? Store.getRows('contratti').find(c=>
-          normalize(c['Id Dipendente (N° Socio)']) === normalize(nSocio)
-        ) : null;
-        const statoVal = contrattoRow?.['Stato Dipendente'] || '';
-        const mansioneVal = contrattoRow?.['Mansione'] || '';
-        const assunzioneVal = contrattoRow?.['Data Assunzione'] || contrattoRow?.['Data assunzione'] || '';
-        const fineRapportoVal = contrattoRow?.['Data fine rapporto'] || '';
-        // Normalizza DD-MM-YYYY / DD/MM/YYYY → YYYY-MM-DD per l'input type="date"
-        const toDateInputVal = v => {
-          v = String(v||'');
-          if(/^\d{2}[\/\-]\d{2}[\/\-]\d{4}$/.test(v)){ const p=v.split(/[\/\-]/); return p[2]+'-'+p[1]+'-'+p[0]; }
-          return v;
-        };
-        html+=`<div class="form-group"><label class="field-label">Stato Dipendente <small style="color:#888">(da Contratti)</small></label>
-          <input type="text" value="${esc(statoVal)}" disabled style="background:#f3f4f6;color:#555;cursor:not-allowed"/></div>`;
-        html+=`<div class="form-group"><label class="field-label">Mansione <small style="color:#888">(da Contratti)</small></label>
-          <input type="text" value="${esc(mansioneVal)}" disabled style="background:#f3f4f6;color:#555;cursor:not-allowed"/></div>`;
-        html+=`<div class="form-group"><label class="field-label">Data assunzione <small style="color:#888">(da Contratti)</small></label>
-          <input type="date" value="${esc(toDateInputVal(assunzioneVal))}" disabled style="background:#f3f4f6;color:#555;cursor:not-allowed"/></div>`;
-        html+=`<div class="form-group"><label class="field-label">Data fine rapporto <small style="color:#888">(da Contratti)</small></label>
-          <input type="date" value="${esc(toDateInputVal(fineRapportoVal))}" disabled style="background:#f3f4f6;color:#555;cursor:not-allowed"/></div>`;
       }
       html+='</div></div>';
     }
