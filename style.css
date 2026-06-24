@@ -1089,3 +1089,9 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
      l'unico modo corretto per stampare le statistiche è il bottone 🖨 Stampa dell'app */
   .stats-content-screen-only { display: none !important; }
 }
+
+/* Selezione multipla righe tabella */
+.row-selected { background: #eff6ff !important; }
+.row-selected:hover { background: #dbeafe !important; }
+.bulk-edit-bar { animation: fadeIn .15s ease; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }

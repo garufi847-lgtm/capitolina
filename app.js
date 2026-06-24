@@ -84,55 +84,62 @@ const Store = {
     row._id=Date.now().toString(36)+Math.random().toString(36).slice(2);
     this.data[t].rows.push(row);
     this.save(t);
-    if(t==='dipendenti') this._propagateDipendentiFields(row);
+    if(['dipendenti','contratti','formazione','sorveglianza'].includes(t)) this._syncAllTablesForSocio(row);
     if(['contratti','formazione','sorveglianza'].includes(t)) this._ensureDipendenteExists(row);
   },
   updateRow(t,idx,row){
     const id=this.data[t].rows[idx]?._id;
     this.data[t].rows[idx]={...row,_id:id};
     this.save(t);
-    if(t==='dipendenti') this._propagateDipendentiFields(this.data[t].rows[idx]);
+    if(['dipendenti','contratti','formazione','sorveglianza'].includes(t)) this._syncAllTablesForSocio(this.data[t].rows[idx]);
     if(['contratti','formazione','sorveglianza'].includes(t)) this._ensureDipendenteExists(this.data[t].rows[idx]);
   },
   deleteRow(t,idx){ this.data[t].rows.splice(idx,1); this.save(t); },
 
-  // Propaga i campi anagrafici di base (Cognome, Nome, Azienda) da un dipendente verso
-  // i record già esistenti in Contratti, Formazione, Sorveglianza che hanno lo stesso N° Socio.
-  // Così se l'anagrafica viene aggiornata (es. import correttivo, cambio azienda), i dati
-  // duplicati nelle altre tabelle restano sempre coerenti senza doverli modificare a mano.
-  _propagateDipendentiFields(dipRow){
-    const nSocio = String(dipRow['N° Socio']||'').trim();
-    if(!nSocio) return;
+  // Sincronizzazione UNIVERSALE tra tutte le tabelle collegate (Dipendenti, Contratti,
+  // Formazione, Sorveglianza), tramite N° Socio. A differenza della vecchia logica
+  // (che partiva solo da Dipendenti), questa funzione viene chiamata da QUALSIASI tabella
+  // venga salvata/importata — così se modifichi "Stato Dipendente" direttamente in Contratti,
+  // anche Formazione e Sorveglianza (e Dipendenti) si aggiornano, e viceversa.
+  // Per ogni campo condiviso, usa il valore più recente trovato (quello della riga appena
+  // salvata ha sempre priorità, dato che è la modifica più fresca).
+  _syncAllTablesForSocio(sourceRow){
     const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
-    const nSocioNorm = normalize(nSocio);
+    // N° Socio può chiamarsi "N° Socio" (Dipendenti) o "Id Dipendente (N° Socio)" (altre tabelle)
+    const nSocioRaw = String(sourceRow['N° Socio'] || sourceRow['Id Dipendente (N° Socio)'] || '').trim();
+    if(!nSocioRaw) return;
+    const nSocioNorm = normalize(nSocioRaw);
 
-    // Campi anagrafici/lavorativi da propagare da Dipendenti verso le altre tabelle.
-    // Le tabelle di destinazione possono avere lo stesso campo scritto con maiuscole/minuscole
-    // diverse (es. "Stato Dipendente" vs "Stato dipendente", "Data di Nascita" vs "Data di nascita")
-    // — per questo la sincronizzazione cerca la chiave REALE già presente in ogni riga di
-    // destinazione (case-insensitive), invece di assumere un nome esatto fisso.
-    const fieldsToSync = {
-      'cognome': dipRow['Cognome'],
-      'nome': dipRow['Nome'],
-      'azienda': dipRow['Azienda'],
-      'stato dipendente': dipRow['Stato Dipendente'],
-      'data di nascita': dipRow['Data di Nascita'],
-      'luogo di nascita': dipRow['Luogo di Nascita'],
-      'codice fiscale': dipRow['Codice Fiscale'],
-    };
+    // Campi condivisi da sincronizzare ovunque esistano (in forma lowercase per il match)
+    const SYNC_FIELDS = ['cognome','nome','azienda','stato dipendente','mansione',
+      'data di nascita','luogo di nascita','codice fiscale','data assunzione'];
 
-    ['contratti','formazione','sorveglianza'].forEach(targetTable=>{
+    // Mappa: campo lowercase → valore preso dalla riga appena salvata (sourceRow),
+    // usando la chiave reale presente lì (case-insensitive)
+    const sourceKeyByLower = {};
+    Object.keys(sourceRow).forEach(k=>{ sourceKeyByLower[k.toLowerCase().trim()] = k; });
+    const valuesToSync = {};
+    SYNC_FIELDS.forEach(fieldLower=>{
+      const realKey = sourceKeyByLower[fieldLower];
+      if(realKey && sourceRow[realKey] !== '' && sourceRow[realKey] !== undefined){
+        valuesToSync[fieldLower] = sourceRow[realKey];
+      }
+    });
+    if(!Object.keys(valuesToSync).length) return;
+
+    ['dipendenti','contratti','formazione','sorveglianza'].forEach(targetTable=>{
       const rows = this.data[targetTable]?.rows;
       if(!rows) return;
       let changed = false;
       rows.forEach(r=>{
-        if(normalize(r['Id Dipendente (N° Socio)']) !== nSocioNorm) return;
-        // Mappa: versione lowercase della chiave → chiave reale presente in questa riga
+        if(r === sourceRow) return; // non risincronizzare la riga che ha appena scatenato l'update
+        const rNSocio = normalize(r['N° Socio'] || r['Id Dipendente (N° Socio)'] || '');
+        if(rNSocio !== nSocioNorm) return;
+
         const keyByLower = {};
         Object.keys(r).forEach(k=>{ keyByLower[k.toLowerCase().trim()] = k; });
 
-        Object.entries(fieldsToSync).forEach(([fieldLower, val])=>{
-          if(val === undefined) return;
+        Object.entries(valuesToSync).forEach(([fieldLower, val])=>{
           const realKey = keyByLower[fieldLower];
           if(!realKey) return; // questa tabella non ha questo campo: salta
           if(r[realKey] !== val){ r[realKey] = val; changed = true; }
@@ -249,6 +256,11 @@ const FIELDS = {
   'Assistenza Sanitaria integrativa':{type:'radio', opts:'assistenza'},
   'Data inizio':                    {type:'date'},
   'Data fine':                      {type:'date'},
+  'Data Assunzione':                {type:'date'},
+  'Fine periodo 1° ingresso':       {type:'date'},
+  'Fine periodo 1° ingresso ':      {type:'date'}, // variante con spazio finale presente nei dati reali
+  'Fine 24 mesi':                   {type:'date'},
+  'Data fine rapporto':             {type:'date'},
   'Data Proroga 1':                 {type:'date'},
   'Data Proroga 2':                 {type:'date'},
   'Data Proroga 3':                 {type:'date'},
@@ -745,6 +757,67 @@ const CustomLayout = {
   },
 };
 
+// ─── ETICHETTE PERSONALIZZATE PER LE RICERCHE RAPIDE (solo admin) ──────────────
+// Permette di rinominare il titolo mostrato sulle card delle ricerche rapide,
+// senza modificare l'id interno o la logica del filtro. Persistita allo stesso modo
+// del layout: localStorage + sincronizzazione NAS se configurato.
+const CustomLabels = {
+  _cache: {},
+  base(){ return typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : ''; },
+
+  async load(t){
+    if(this._cache[t]) return this._cache[t];
+    const base = this.base();
+    if(base){
+      try{
+        const r = await fetch(`${base}/api/qslabels_${t}`);
+        if(r.ok){
+          const data = await r.json();
+          if(data && data.labels && typeof data.labels==='object'){
+            this._cache[t] = data.labels;
+            localStorage.setItem('qslabels_'+t, JSON.stringify(data.labels));
+            return data.labels;
+          }
+        }
+      }catch(e){ console.warn('CustomLabels.load: NAS non raggiungibile, uso locale', e.message); }
+    }
+    const local = localStorage.getItem('qslabels_'+t);
+    if(local){
+      try{ this._cache[t] = JSON.parse(local); return this._cache[t]; }catch{}
+    }
+    this._cache[t] = {};
+    return {};
+  },
+
+  async save(t, labels){
+    this._cache[t] = labels;
+    localStorage.setItem('qslabels_'+t, JSON.stringify(labels));
+    const base = this.base();
+    if(base){
+      try{
+        await fetch(`${base}/api/qslabels_${t}`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({labels})
+        });
+      }catch(e){ console.warn('CustomLabels.save: sync NAS fallita', e.message); }
+    }
+  },
+
+  // Etichetta da mostrare per la ricerca con id `searchId` nella tabella t: quella
+  // personalizzata se presente, altrimenti l'etichetta di default passata come fallback.
+  get(t, searchId, defaultLabel){
+    return (this._cache[t] && this._cache[t][searchId]) || defaultLabel;
+  },
+
+  async rename(t, searchId, newLabel){
+    const labels = this._cache[t] || {};
+    if(newLabel && newLabel.trim()) labels[searchId] = newLabel.trim();
+    else delete labels[searchId]; // stringa vuota = ripristina il nome originale
+    await this.save(t, labels);
+  },
+};
+
 
 const SKIP = new Set(['_id','Riepilogo Dipendente','Riepilogo Dati contrattuali','Riepilogo Formazione',
   'Riepilogo Sorveglianza Sanitaria','Allegati documenti permesso','Allegati formazione (Attestati)',
@@ -1033,7 +1106,15 @@ const App = {
     let pp=0;D.forEach(r=>{const tp=r['Tipo permesso'];if(tp&&tp.trim()&&tp!=='nan')pp++;});
     let ps=0;D.forEach(r=>{const s=r['Data scadenza Permesso Soggiorno'];if(!s)return;const p=s.split(/[\/\-]/);if(p.length===3){const d=p[0].length===4?new Date(p[0]+'-'+p[1]+'-'+p[2]):new Date(p[2]+'-'+p[1]+'-'+p[0]);if(!isNaN(d)&&d>=oggi&&d<=lim)ps++;}});
 
-    const sc_=(cl,l,v,s,onclick)=>`<div class="stat-card ${cl}"${onclick?' onclick="'+onclick+'" style="cursor:pointer"':''} title="${onclick?'Clicca per dettagli':''}"><div class="stat-label">${l}</div><div class="stat-value">${v}</div><div class="stat-sub">${s}</div></div>`;
+    const sc_=(cl,id,l,v,s,onclick)=>{
+      const displayLabel = CustomLabels.get('dashboard', id, l);
+      const renameBtn = Auth.isAdmin()
+        ? `<button class="icon-btn" title="Rinomina" style="position:absolute;top:6px;right:6px;background:#fff"
+            onclick="event.stopPropagation();App.renameDashCard('${id}','${esc(l).replace(/'/g,"\\'")}')">✏</button>`
+        : '';
+      const styleAttr = onclick ? 'position:relative;cursor:pointer' : 'position:relative';
+      return `<div class="stat-card ${cl}" style="${styleAttr}"${onclick?' onclick="'+onclick+'"':''} title="${onclick?'Clicca per dettagli':''}">${renameBtn}<div class="stat-label">${esc(displayLabel)}</div><div class="stat-value">${v}</div><div class="stat-sub">${s}</div></div>`;
+    };
     const bar_=(l,n,m,c,cb)=>`<div class="bar-item"${cb?' onclick="'+cb+'" style="cursor:pointer"':''} title="${cb?'Clicca per filtrare':''}"><span class="bar-label" title="${esc(l)}">${esc(l)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/m*100)}%;background:${c}"></div></div><span class="bar-count">${n}</span></div>`;
     const pan_=(t,b)=>`<div class="panel"><div class="panel-header">${t}</div><div class="panel-body">${b}</div></div>`;
 
@@ -1053,14 +1134,14 @@ const App = {
 
     document.getElementById('content').innerHTML=
       '<div class="stats-grid">'+
-      sc_('blue','Dipendenti',D.length,'in anagrafica',"App.show('dipendenti')")+
-      sc_('cyan','Contratti',C.length,'rapporti di lavoro',"App.show('contratti')")+
-      sc_('green','Formazione',F.length,'corsi registrati',"App.show('formazione')")+
-      sc_('warn','Scadenze Sorveglianza',sc,'entro 90 giorni',"App.dashDetail('scadenze')")+
-      sc_('red','Sorveglianza',S.length,'visite registrate',"App.show('sorveglianza')")+
-      sc_('blue','Aziende',A.length,'in anagrafica',"App.show('aziende')")+
-      sc_('red','Scadenze Permesso',ps,'entro 90 giorni',"App.dashDetail('permessi')")+
-      sc_('cyan','Permessi Soggiorno',pp,'dipendenti con permesso',"App.dashDetail('tutti_permessi')")+
+      sc_('blue','dip_count','Dipendenti',D.length,'in anagrafica',"App.show('dipendenti')")+
+      sc_('cyan','cont_count','Contratti',C.length,'rapporti di lavoro',"App.show('contratti')")+
+      sc_('green','form_count','Formazione',F.length,'corsi registrati',"App.show('formazione')")+
+      sc_('warn','scad_sorv','Scadenze Sorveglianza',sc,'entro 90 giorni',"App.dashDetail('scadenze')")+
+      sc_('red','sorv_count','Sorveglianza',S.length,'visite registrate',"App.show('sorveglianza')")+
+      sc_('blue','az_count','Aziende',A.length,'in anagrafica',"App.show('aziende')")+
+      sc_('red','scad_perm','Scadenze Permesso',ps,'entro 90 giorni',"App.dashDetail('permessi')")+
+      sc_('cyan','perm_sogg','Permessi Soggiorno',pp,'dipendenti con permesso',"App.dashDetail('tutti_permessi')")+
       '</div><div class="dash-grid">'+
       pan_('📄 Contratti per Azienda',topAz.map(([a,n])=>`<div class="bar-item" data-table="contratti" data-col="Azienda" data-val="${esc(a)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Filtra contratti per azienda"><span class="bar-label" title="${esc(a)}">${esc(a)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/mAz*100)}%;background:var(--accent)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
       pan_('🎓 Formazione per Tipo',topF.map(([t,n])=>`<div class="bar-item" data-table="formazione" data-col="Tipologia Corso" data-val="${esc(t)}" onclick="App.dashFilterEl(this)" style="cursor:pointer" title="Filtra formazione per tipo"><span class="bar-label" title="${esc(t)}">${esc(t)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/mF*100)}%;background:var(--accent2)"></div></div><span class="bar-count">${n}</span></div>`).join(''))+
@@ -1144,7 +1225,135 @@ const App = {
   },
 
   sortBy(c){if(this.sortCol===c)this.sortDir*=-1;else{this.sortCol=c;this.sortDir=1;}this.renderTable(this.table);},
-  goPage(p){const tp=Math.max(1,Math.ceil(this.filtered.length/this.pageSize));this.page=Math.max(1,Math.min(p,tp));this.renderTable(this.table);},
+  goPage(p){const tp=Math.max(1,Math.min(p,Math.max(1,Math.ceil(this.filtered.length/this.pageSize))));this.page=tp;this.renderTable(this.table);},
+
+  // ── SELEZIONE MULTIPLA ─────────────────────────────────────────────────────
+  toggleSelectRow(t, id, checked){
+    if(!this.selected) this.selected = new Set();
+    if(checked) this.selected.add(id); else this.selected.delete(id);
+    this.renderTable(t);
+  },
+  toggleSelectAllPage(t, checked){
+    if(!this.selected) this.selected = new Set();
+    const s0=(this.page-1)*this.pageSize, page=this.filtered.slice(s0,s0+this.pageSize);
+    page.forEach(r=>{ if(checked) this.selected.add(r._id); else this.selected.delete(r._id); });
+    this.renderTable(t);
+  },
+  clearSelection(t){
+    this.selected = new Set();
+    this.renderTable(t);
+  },
+
+  // Apre il modale per scegliere un campo e un valore da applicare a tutti i record selezionati
+  openBulkEdit(t){
+    if(!this.selected || !this.selected.size){ toast('Nessun record selezionato','error'); return; }
+    const allCols = Store.getCols(t).filter(c=>!SKIP.has(c)&&c!=='_id');
+    // Per Dipendenti, escludi i campi sincronizzati da Contratti (non editabili direttamente)
+    const editableCols = (t==='dipendenti')
+      ? allCols.filter(c=>!['Stato Dipendente','Mansione','Data assunzione','Data fine rapporto'].includes(c))
+      : allCols;
+
+    document.getElementById('modal-title').textContent = `✎ Modifica campo per ${this.selected.size} record selezionati`;
+    document.getElementById('modal-body').innerHTML = `
+      <div style="font-size:13px;color:var(--text2);margin-bottom:14px">
+        Scegli il campo da modificare e il nuovo valore: verrà applicato a tutti i record selezionati,
+        sovrascrivendo il valore attuale.
+      </div>
+      <div class="form-group">
+        <label class="field-label">Campo da modificare</label>
+        <select id="bulk-edit-field" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
+          onchange="App._renderBulkEditValueInput('${t}')">
+          <option value="">-- Seleziona campo --</option>
+          ${editableCols.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+        </select>
+      </div>
+      <div id="bulk-edit-value-wrap"></div>
+    `;
+    document.getElementById('modal-footer').innerHTML = `
+      <button class="btn btn-ghost" onclick="App.closeModal()">Annulla</button>
+      <button class="btn btn-primary" onclick="App._applyBulkEdit('${t}')">Applica a tutti</button>`;
+    App.openModal();
+  },
+
+  _renderBulkEditValueInput(t){
+    const field = document.getElementById('bulk-edit-field').value;
+    const wrap = document.getElementById('bulk-edit-value-wrap');
+    if(!field){ wrap.innerHTML=''; return; }
+    wrap.innerHTML = `<div class="form-group"><label class="field-label">Nuovo valore</label>${buildField(field,'')}</div>`;
+  },
+
+  async _applyBulkEdit(t){
+    const field = document.getElementById('bulk-edit-field').value;
+    if(!field){ toast('Seleziona un campo','error'); return; }
+    const def = FIELDS[field];
+    let newValue;
+    if(def?.type==='radio'){
+      const el = document.querySelector(`input[name="ff_${field.replace(/[^a-zA-Z0-9]/g,'_')}"]:checked`);
+      newValue = el ? el.value : '';
+    } else if(def?.type==='date'){
+      const el = document.getElementById('ff_'+field.replace(/[^a-zA-Z0-9]/g,'_'));
+      if(el && el.value){
+        const p = el.value.split('-');
+        newValue = p.length===3 ? p[2]+'-'+p[1]+'-'+p[0] : el.value;
+      } else { newValue = ''; }
+    } else {
+      const el = document.getElementById('ff_'+field.replace(/[^a-zA-Z0-9]/g,'_'));
+      newValue = el ? el.value : '';
+    }
+
+    const rows = Store.getRows(t);
+    let count = 0;
+    rows.forEach((row, idx)=>{
+      if(this.selected.has(row._id)){
+        const updated = {...row, [field]: newValue};
+        Store.updateRow(t, idx, updated);
+        count++;
+      }
+    });
+    toast(`Campo "${field}" aggiornato su ${count} record ✓`);
+    this.selected = new Set();
+    this.closeModal();
+    this.renderTable(t);
+  },
+
+  bulkDelete(t){
+    if(!this.selected || !this.selected.size){ toast('Nessun record selezionato','error'); return; }
+    const count = this.selected.size;
+    document.getElementById('confirm-title').textContent='Elimina record selezionati';
+    document.getElementById('confirm-msg').textContent=`Eliminare ${count} record selezionati? Operazione non reversibile.`+
+      (t==='dipendenti' ? ' Verranno eliminati anche i record collegati in Contratti, Formazione e Sorveglianza.' : '');
+    document.getElementById('confirm-ok').onclick=()=>{
+      const ids = new Set(this.selected);
+      // Elimina dal fondo per non sballare gli indici durante lo splice
+      const rows = Store.getRows(t);
+      const indicesToRemove = [];
+      rows.forEach((r,idx)=>{ if(ids.has(r._id)) indicesToRemove.push(idx); });
+      indicesToRemove.sort((a,b)=>b-a).forEach(idx=>{
+        if(t==='dipendenti'){
+          // Riusa la stessa logica di cascata di confirmDelete
+          const row = Store.getRows(t)[idx];
+          const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
+          const nSocioNorm = normalize(row['N° Socio']);
+          if(nSocioNorm){
+            ['contratti','formazione','sorveglianza'].forEach(tt=>{
+              const rr = Store.getRows(tt);
+              const toRemove = [];
+              rr.forEach((r,i)=>{ if(normalize(r['Id Dipendente (N° Socio)'])===nSocioNorm) toRemove.push(i); });
+              toRemove.sort((a,b)=>b-a).forEach(i=>Store.deleteRow(tt,i));
+              const b=document.getElementById('badge-'+tt); if(b) b.textContent=Store.getRows(tt).length;
+            });
+          }
+        }
+        Store.deleteRow(t, idx);
+      });
+      toast(`${count} record eliminati`,'error');
+      this.selected = new Set();
+      const b=document.getElementById('badge-'+t); if(b) b.textContent=Store.getRows(t).length;
+      this.closeConfirm();
+      this.renderTable(t);
+    };
+    document.getElementById('confirm-overlay').classList.add('open');
+  },
 
   // ── VISUALIZZA DETTAGLIO ───────────────────────────────────────────────────
   openView(t, idx){
@@ -2416,11 +2625,11 @@ const App = {
     });
     Store.data[t].rows = pairs.map(p=>p.row);
     Store.save(t);
-    // Se è un import di Dipendenti, propaga Cognome/Nome/Azienda ai record già esistenti
-    // in Contratti/Formazione/Sorveglianza collegati per N° Socio (vedi addRow/updateRow,
-    // qui bypassati per efficienza in import massivi).
-    if(t==='dipendenti'){
-      Store.getRows(t).forEach(row => Store._propagateDipendentiFields(row));
+    // Sincronizzazione universale: se è un import su una delle 4 tabelle collegate, propaga
+    // i campi condivisi (Stato Dipendente, Mansione, ecc.) verso tutte le altre (vedi
+    // addRow/updateRow, qui bypassati per efficienza in import massivi).
+    if(['dipendenti','contratti','formazione','sorveglianza'].includes(t)){
+      Store.getRows(t).forEach(row => Store._syncAllTablesForSocio(row));
     }
     // Direzione inversa: se è un import di Contratti/Formazione/Sorveglianza, crea
     // automaticamente in Dipendenti i record mancanti per N° Socio non ancora presenti.
@@ -2703,6 +2912,7 @@ window.addEventListener('keydown',e=>App.handleKey(e));
 (async()=>{
   try{ await Store.load(); }catch(e){ console.error('Store error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','aziende'].map(t=>CustomLayout.load(t))); }catch(e){ console.warn('CustomLayout boot load error:',e); }
+  try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','dashboard'].map(t=>CustomLabels.load(t))); }catch(e){ console.warn('CustomLabels boot load error:',e); }
   document.getElementById('loading').classList.add('hidden');
   const _sess=Auth.current();
   if(_sess){ document.getElementById('login-screen').style.display='none'; App.initApp(_sess); }
@@ -3180,7 +3390,14 @@ App.renderTable = function(t){
   const advBadge=advCount?`<span style="background:var(--accent);color:#fff;border-radius:12px;padding:1px 8px;font-size:11px;margin-left:4px">${advCount} filtri</span>`:'';
   const resetBtn=advCount?`<button class="btn btn-ghost" style="font-size:12px;color:var(--danger)" onclick="App.advCriteria=[];App.advCustomFilterKey=null;App.advCompanyFilter=null;App.renderTable('${t}')">✕ Rimuovi filtri</button>`:'';
 
-  const ths=cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+
+  // Selezione multipla: mantiene gli _id selezionati attraverso paginazione/filtri (this.selected)
+  if(!this.selected) this.selected = new Set();
+  if(this._selectedTable !== t){ this.selected = new Set(); this._selectedTable = t; } // cambio tabella: azzera selezione
+  const pageIds = page.map(r=>r._id);
+  const allPageSelected = pageIds.length>0 && pageIds.every(id=>this.selected.has(id));
+
+  const ths=`<th style="width:34px"><input type="checkbox" ${allPageSelected?'checked':''} onchange="App.toggleSelectAllPage('${t}',this.checked)" title="Seleziona tutti in questa pagina"/></th>`+
+    cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+
     `<th style="width:100px;cursor:pointer" onclick="App.sortCol=null;App.sortDir=1;App.renderTable('${t}')" title="Torna all'ordine di inserimento">
       ${!this.sortCol?'🕒 Inserimento':'↺'}</th>`;
   // Per Dipendenti, Stato Dipendente e Mansione vengono sincronizzati dal contratto
@@ -3196,6 +3413,7 @@ App.renderTable = function(t){
   }
   const trs=page.map(row=>{
     const oi=all.indexOf(row);
+    const isSel = this.selected.has(row._id);
     const tds=cols.map(c=>{
       let v=row[c]??'';
       if(t==='dipendenti' && ['Stato Dipendente','Mansione','Data assunzione','Data fine rapporto'].includes(c)){
@@ -3212,8 +3430,18 @@ App.renderTable = function(t){
     const actView=`<button class="icon-btn view" title="Visualizza" onclick="App.openView('${t}',${oi})">👁</button>`;
     const actMod=Auth.can('edit')?`<button class="icon-btn" title="Modifica" onclick="App.openEdit('${t}',${oi})">✎</button>`:'';
     const actDel=Auth.can('delete')?`<button class="icon-btn danger" title="Elimina" onclick="App.confirmDelete('${t}',${oi})">✕</button>`:'';
-    return`<tr>${tds}<td><div class="td-actions">${actView}${actMod}${actDel}</div></td></tr>`;
+    const checkboxTd=`<td><input type="checkbox" ${isSel?'checked':''} onchange="App.toggleSelectRow('${t}','${row._id}',this.checked)"/></td>`;
+    return`<tr class="${isSel?'row-selected':''}">${checkboxTd}${tds}<td><div class="td-actions">${actView}${actMod}${actDel}</div></td></tr>`;
   }).join('')||'<tr><td colspan="99" style="text-align:center;color:var(--text3);padding:36px">Nessun risultato</td></tr>';
+
+  const selCount = this.selected.size;
+  const bulkBar = selCount>0 ? `
+    <div class="bulk-edit-bar" style="display:flex;align-items:center;gap:10px;background:#eff6ff;border:1px solid var(--accent);border-radius:8px;padding:8px 14px;margin-bottom:10px">
+      <span style="font-weight:600;font-size:13px;color:var(--accent)">${selCount} selezionat${selCount===1?'o':'i'}</span>
+      ${Auth.can('edit')?`<button class="btn btn-primary" style="font-size:13px" onclick="App.openBulkEdit('${t}')">✎ Modifica campo per tutti</button>`:''}
+      ${Auth.can('delete')?`<button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.bulkDelete('${t}')">✕ Elimina selezionati</button>`:''}
+      <button class="btn btn-ghost" style="font-size:13px;margin-left:auto" onclick="App.clearSelection('${t}')">Deseleziona tutto</button>
+    </div>` : '';
 
   let pgs='';const mB=7,sP=Math.max(1,Math.min(this.page-3,tp-mB+1)),eP=Math.min(tp,sP+mB-1);
   for(let i=sP;i<=eP;i++)pgs+=`<button class="page-btn ${i===this.page?'active':''}" onclick="App.goPage(${i})">${i}</button>`;
@@ -3232,6 +3460,7 @@ App.renderTable = function(t){
         ${Auth.can('clear_table')?`<button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.clearTable('${t}')">🗑 Svuota</button>`:''}
         ${Auth.isAdmin()?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.openLayoutEditor('${t}')" title="Personalizza l'ordine e la posizione dei campi (solo admin)">🧩 Personalizza Layout</button>`:''}
       </div>
+      ${bulkBar}
       <div class="table-scroll"><table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>
       <div class="pagination">
         <span class="page-info">${s0+1}–${Math.min(s0+this.pageSize,tot)} di ${tot}</span>
@@ -3650,10 +3879,13 @@ App.openQuickSearches = function(t){
     let matched = srcRows.filter(r => advMatchesCriteria(r, crit));
     if(s.customFilter) matched = applyCustomFilter(s.customFilter, matched, s._companyFilter);
     const count = matched.length;
+    const displayLabel = CustomLabels.get(t, s.id, s.label);
     html += `
-      <div class="quick-card" onclick="App.runQuickSearch('${t}','${s.id}')">
+      <div class="quick-card" style="position:relative" onclick="App.runQuickSearch('${t}','${s.id}')">
+        ${Auth.isAdmin()?`<button class="icon-btn" title="Rinomina" style="position:absolute;top:6px;right:6px;background:#fff"
+          onclick="event.stopPropagation();App.renameQuickSearch('${t}','${s.id}')">✏</button>`:''}
         <div class="quick-card-icon">${s.icon}</div>
-        <div class="quick-card-label">${esc(s.label)}</div>
+        <div class="quick-card-label">${esc(displayLabel)}</div>
         <div class="quick-card-desc">${esc(s.desc)}</div>
         <div class="quick-card-count">${count} record</div>
       </div>`;
@@ -3666,11 +3898,39 @@ App.openQuickSearches = function(t){
   App.openModal();
 };
 
+// Rinomina (solo admin) una ricerca rapida: chiede il nuovo nome e salva la personalizzazione.
+// Lasciare vuoto ripristina il nome originale.
+App.renameQuickSearch = async function(t, searchId){
+  if(!Auth.isAdmin()){ toast('Funzione riservata agli amministratori','error'); return; }
+  const searches = QUICK_SEARCHES[t] || [];
+  const s = searches.find(x => x.id === searchId);
+  if(!s) return;
+  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
+  const current = CustomLabels.get(t, searchId, s.label);
+  const newLabel = prompt('Nuovo nome per questa ricerca rapida (lascia vuoto per ripristinare il nome originale):', current);
+  if(newLabel === null) return; // annullato
+  await CustomLabels.rename(t, searchId, newLabel);
+  toast(newLabel.trim() ? 'Nome aggiornato ✓' : 'Nome ripristinato al default');
+  App.openQuickSearches(t);
+};
+
+// Rinomina (solo admin) una card della Dashboard. Lasciare vuoto ripristina il nome originale.
+App.renameDashCard = async function(cardId, defaultLabel){
+  if(!Auth.isAdmin()){ toast('Funzione riservata agli amministratori','error'); return; }
+  const current = CustomLabels.get('dashboard', cardId, defaultLabel);
+  const newLabel = prompt('Nuovo nome per questa voce della Dashboard (lascia vuoto per ripristinare il nome originale):', current);
+  if(newLabel === null) return; // annullato
+  await CustomLabels.rename('dashboard', cardId, newLabel);
+  toast(newLabel.trim() ? 'Nome aggiornato ✓' : 'Nome ripristinato al default');
+  App.renderDash();
+};
+
 // ── Run quick search → show results in styled table inside modal ──────────────
 App.runQuickSearch = function(t, id){
   const searches = QUICK_SEARCHES[t] || [];
   const s = searches.find(x => x.id === id);
   if(!s) return;
+  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
 
   const srcTable = s.table || t;
   const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
@@ -3733,6 +3993,7 @@ App.applyQuickFilter = function(t, id){
   const searches = QUICK_SEARCHES[t] || [];
   const s = searches.find(x => x.id === id);
   if(!s) return;
+  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
   App.advCriteria = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   App.advCustomFilterKey = s.customFilter || null;
   App.advCompanyFilter = s._companyFilter || null;
@@ -3749,6 +4010,7 @@ App.printQuickResult = function(id, t){
   const searches = QUICK_SEARCHES[t] || [];
   const s = searches.find(x => x.id === id);
   if(!s) return;
+  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
   const srcTable = s.table || t;
   const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   const allRows = Store.getRows(srcTable);
@@ -3801,6 +4063,7 @@ App.exportQuickResult = function(id, t){
   const searches = QUICK_SEARCHES[t] || [];
   const s = searches.find(x => x.id === id);
   if(!s) return;
+  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
   const srcTable = s.table || t;
   const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   const allRows = Store.getRows(srcTable);
