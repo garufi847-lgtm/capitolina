@@ -106,7 +106,20 @@ const Store = {
     const normalize = s => String(s||'').trim().replace(',', '.').toUpperCase();
     const nSocioNorm = normalize(nSocio);
 
-    const fieldsToSync = { 'Cognome': dipRow['Cognome'], 'Nome': dipRow['Nome'], 'Azienda': dipRow['Azienda'] };
+    // Campi anagrafici/lavorativi da propagare da Dipendenti verso le altre tabelle.
+    // Le tabelle di destinazione possono avere lo stesso campo scritto con maiuscole/minuscole
+    // diverse (es. "Stato Dipendente" vs "Stato dipendente", "Data di Nascita" vs "Data di nascita")
+    // — per questo la sincronizzazione cerca la chiave REALE già presente in ogni riga di
+    // destinazione (case-insensitive), invece di assumere un nome esatto fisso.
+    const fieldsToSync = {
+      'cognome': dipRow['Cognome'],
+      'nome': dipRow['Nome'],
+      'azienda': dipRow['Azienda'],
+      'stato dipendente': dipRow['Stato Dipendente'],
+      'data di nascita': dipRow['Data di Nascita'],
+      'luogo di nascita': dipRow['Luogo di Nascita'],
+      'codice fiscale': dipRow['Codice Fiscale'],
+    };
 
     ['contratti','formazione','sorveglianza'].forEach(targetTable=>{
       const rows = this.data[targetTable]?.rows;
@@ -114,8 +127,15 @@ const Store = {
       let changed = false;
       rows.forEach(r=>{
         if(normalize(r['Id Dipendente (N° Socio)']) !== nSocioNorm) return;
-        Object.entries(fieldsToSync).forEach(([field, val])=>{
-          if(val !== undefined && r[field] !== val){ r[field] = val; changed = true; }
+        // Mappa: versione lowercase della chiave → chiave reale presente in questa riga
+        const keyByLower = {};
+        Object.keys(r).forEach(k=>{ keyByLower[k.toLowerCase().trim()] = k; });
+
+        Object.entries(fieldsToSync).forEach(([fieldLower, val])=>{
+          if(val === undefined) return;
+          const realKey = keyByLower[fieldLower];
+          if(!realKey) return; // questa tabella non ha questo campo: salta
+          if(r[realKey] !== val){ r[realKey] = val; changed = true; }
         });
       });
       if(changed) this.save(targetTable);
@@ -1373,8 +1393,8 @@ const App = {
       if(idx!==null){
         Store.updateRow(table,idx,row);
         toast('Record aggiornato ✓');
-        // Aggiorna anche le altre tabelle collegate
-        this.syncRelatedTables(table, row, idx);
+        // Nota: la sincronizzazione verso Contratti/Formazione/Sorveglianza avviene già
+        // automaticamente dentro Store.updateRow tramite _propagateDipendentiFields.
       } else {
         Store.addRow(table,row);
         const newRow = Store.getRows(table)[Store.getRows(table).length-1];
@@ -1846,19 +1866,22 @@ const App = {
 
     // ── SINCRONIZZAZIONE TABELLE COLLEGATE ───────────────────────────────────────
 
-  // Campi da copiare da dipendenti alle tabelle collegate
+  // Campi da copiare da dipendenti alle tabelle collegate. Scritti in lowercase: la
+  // funzione che li usa (createRelatedRows) li applicherà cercando la chiave reale
+  // (case-insensitive) in ciascuna tabella di destinazione.
   _dipFields(dip){
     return {
-      'Id Dipendente (N° Socio)': dip['N° Socio']||'',
-      'Cognome':                  dip['Cognome']||'',
-      'Nome':                     dip['Nome']||'',
-      'Azienda':                  dip['Azienda']||'',
-      'Mansione':                 dip['Mansione']||'',
-      'Stato Dipendente':         dip['Stato Dipendente']||'',
-      'Stato dipendente':         dip['Stato Dipendente']||'',
-      'Appalto / sede di lavoro': dip['Appalto / sede di lavoro']||'',
-      'Data assunzione':          dip['Data assunzione']||'',
-      'Codice Fiscale':           dip['Codice Fiscale']||'',
+      'id dipendente (n° socio)': dip['N° Socio']||'',
+      'cognome':                  dip['Cognome']||'',
+      'nome':                     dip['Nome']||'',
+      'azienda':                  dip['Azienda']||'',
+      'mansione':                 dip['Mansione']||'',
+      'stato dipendente':         dip['Stato Dipendente']||'',
+      'appalto / sede di lavoro': dip['Appalto / sede di lavoro']||'',
+      'data assunzione':          dip['Data assunzione']||'',
+      'codice fiscale':           dip['Codice Fiscale']||'',
+      'data di nascita':          dip['Data di Nascita']||'',
+      'luogo di nascita':         dip['Luogo di Nascita']||'',
     };
   },
 
@@ -1873,7 +1896,10 @@ const App = {
     for(const t of targets){
       const cols = Store.getCols(t);
       const row = {};
-      cols.forEach(c => { row[c] = shared[c] !== undefined ? shared[c] : ''; });
+      cols.forEach(c => {
+        const val = shared[c.toLowerCase().trim()];
+        row[c] = val !== undefined ? val : '';
+      });
       Store.addRow(t, row);
       const b = document.getElementById('badge-'+t);
       if(b) b.textContent = Store.getRows(t).length;
@@ -3235,19 +3261,24 @@ const COMPANIES = [
 // Genera le varianti per-azienda di una ricerca rapida "base": stessa configurazione,
 // ma con un criterio aggiuntivo che filtra per una singola azienda. L'id, la label e la
 // descrizione vengono prefissati col nome breve dell'azienda per distinguerle a colpo d'occhio.
+// IMPORTANTE: il filtro usa "contains" con la parola chiave breve (es. "ALIANTE") invece di un
+// confronto esatto con il nome completo, perché nei dati reali il nome azienda può comparire
+// con piccole variazioni (es. "ALIANTE Soc. Coop." vs "ALIANTE Soc. Coop" senza punto finale,
+// o "FIPAM  Scarl" vs "FIPAM Soc. Coop.") — un match esatto escluderebbe alcuni dipendenti
+// che invece compaiono correttamente nella ricerca generale "Tutte le Aziende".
 function perCompanyVariants(base){
-  return COMPANIES.map(({value, short}) => ({
+  return COMPANIES.map(({short}) => ({
     ...base,
     id: `${base.id}_${short.toLowerCase().replace(/[^a-z0-9]/g,'_')}`,
     label: `${short} — ${base.label}`,
     desc: `${base.desc} (${short})`,
     criteria: base.criteria ? [
       ...base.criteria,
-      { field:'Azienda', fieldDef:{type:'select'}, op:'is', val1:value, val2:'', connector:'AND' },
+      { field:'Azienda', fieldDef:{type:'select'}, op:'contains', val1:short, val2:'', connector:'AND' },
     ] : base.criteria,
     // Se la ricerca usa un customFilter, lo manteniamo identico ma aggiungiamo il filtro azienda
     // come ulteriore step applicato dopo (vedi applyCustomFilter, che lo gestisce per nome chiave).
-    _companyFilter: base.customFilter ? value : undefined,
+    _companyFilter: base.customFilter ? short : undefined,
   }));
 }
 
@@ -3260,7 +3291,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['N° Socio','Cognome','Nome','Data Delibera Ammissione','Note'],
       criteria:[
-        {field:'Azienda',        fieldDef:{type:'select'}, op:'is', val1:'ALIANTE Soc. Coop.', val2:'', connector:'AND'},
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'contains', val1:'ALIANTE', val2:'', connector:'AND'},
         {field:'Stato Socio',    fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',              val2:'', connector:'AND'},
       ]
     },
@@ -3271,7 +3302,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['N° Socio','Cognome','Nome','Data Delibera Ammissione','Note'],
       criteria:[
-        {field:'Azienda',     fieldDef:{type:'select'}, op:'is', val1:'CAPITOLINA LOGISTICA Scarl', val2:'', connector:'AND'},
+        {field:'Azienda',     fieldDef:{type:'select'}, op:'contains', val1:'CAPITOLINA LOGISTICA', val2:'', connector:'AND'},
         {field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',                     val2:'', connector:'AND'},
       ]
     },
@@ -3282,7 +3313,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['N° Socio','Cognome','Nome','Data Delibera Ammissione','Note'],
       criteria:[
-        {field:'Azienda',     fieldDef:{type:'select'}, op:'is', val1:'FIPAM  Scarl', val2:'', connector:'AND'},
+        {field:'Azienda',     fieldDef:{type:'select'}, op:'contains', val1:'FIPAM', val2:'', connector:'AND'},
         {field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',       val2:'', connector:'AND'},
       ]
     },
@@ -3293,7 +3324,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['N° Socio','Cognome','Nome','Data Delibera Ammissione','Note'],
       criteria:[
-        {field:'Azienda',     fieldDef:{type:'select'}, op:'is', val1:'SERIAM Scarl', val2:'', connector:'AND'},
+        {field:'Azienda',     fieldDef:{type:'select'}, op:'contains', val1:'SERIAM', val2:'', connector:'AND'},
         {field:'Stato Socio', fieldDef:{type:'select'}, op:'is', val1:'ATTIVO',       val2:'', connector:'AND'},
       ]
     },
@@ -3304,7 +3335,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
       criteria:[
-        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'ALIANTE Soc. Coop.', val2:'', connector:'AND'},
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'contains',     val1:'ALIANTE', val2:'', connector:'AND'},
         {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                   val2:'', connector:'AND'},
       ]
     },
@@ -3315,7 +3346,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
       criteria:[
-        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'CAPITOLINA LOGISTICA Scarl', val2:'', connector:'AND'},
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'contains',     val1:'CAPITOLINA LOGISTICA', val2:'', connector:'AND'},
         {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                           val2:'', connector:'AND'},
       ]
     },
@@ -3326,7 +3357,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
       criteria:[
-        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'FIPAM  Scarl', val2:'', connector:'AND'},
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'contains',     val1:'FIPAM', val2:'', connector:'AND'},
         {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',             val2:'', connector:'AND'},
       ]
     },
@@ -3337,7 +3368,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
       criteria:[
-        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'SERIAM Scarl', val2:'', connector:'AND'},
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'contains',     val1:'SERIAM', val2:'', connector:'AND'},
         {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',             val2:'', connector:'AND'},
       ]
     },
@@ -3348,7 +3379,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
       criteria:[
-        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'CONSORZIO CAPITOLINA Srl', val2:'', connector:'AND'},
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'contains',     val1:'CONSORZIO CAPITOLINA', val2:'', connector:'AND'},
         {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                         val2:'', connector:'AND'},
       ]
     },
@@ -3359,7 +3390,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
       criteria:[
-        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:'SNA Servizi & Management Srl', val2:'', connector:'AND'},
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'contains',     val1:'SNA', val2:'', connector:'AND'},
         {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                             val2:'', connector:'AND'},
       ]
     },
@@ -3370,7 +3401,7 @@ const QUICK_SEARCHES = {
       table:'dipendenti',
       cols:['Azienda','Cognome','Nome','Tipo permesso','Data rilascio Permesso Soggiorno','Appalto / sede di lavoro','Data scadenza Permesso Soggiorno','Note permesso'],
       criteria:[
-        {field:'Azienda',        fieldDef:{type:'select'}, op:'is',           val1:"SOCIETA' CESTINO", val2:'', connector:'AND'},
+        {field:'Azienda',        fieldDef:{type:'select'}, op:'contains',     val1:'CESTINO', val2:'', connector:'AND'},
         {field:'Tipo permesso',  fieldDef:{type:'select'}, op:'is_not_empty', val1:'',                 val2:'', connector:'AND'},
       ]
     },
@@ -3598,7 +3629,8 @@ function applyCustomFilter(key, rows, companyFilter){
   }
   // Filtro azienda aggiuntivo per le varianti per-singola-azienda di ricerche con customFilter
   if(companyFilter){
-    result = result.filter(r => r['Azienda'] === companyFilter);
+    const cf = companyFilter.toLowerCase();
+    result = result.filter(r => String(r['Azienda']||'').toLowerCase().includes(cf));
   }
   return result;
 }
