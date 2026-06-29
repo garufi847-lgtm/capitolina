@@ -112,6 +112,20 @@
   </div>
 </div>
 
+<!-- Modal Allegati (separato e indipendente dal modal principale, così aprirlo da DENTRO
+     un form di Aggiungi/Modifica non tocca mai il DOM del form sottostante, che resta vivo
+     con tutti i valori inseriti dall'utente intatti mentre questo modale è in primo piano) -->
+<div class="modal-overlay" id="allegati-modal-overlay" onclick="Allegati.closeAndRestoreForm(event)" style="z-index:1100">
+  <div class="modal" id="allegati-modal">
+    <div class="modal-header">
+      <h3 id="allegati-modal-title">—</h3>
+      <button class="icon-btn" onclick="Allegati.closeAndRestoreForm()">✕</button>
+    </div>
+    <div class="modal-body" id="allegati-modal-body"></div>
+    <div class="modal-footer" id="allegati-modal-footer"></div>
+  </div>
+</div>
+
 <!-- Confirm -->
 <div class="modal-overlay" id="confirm-overlay" onclick="App.closeConfirm(event)">
   <div class="confirm-box">

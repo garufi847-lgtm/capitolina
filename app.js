@@ -114,6 +114,14 @@ const Store = {
     const SYNC_FIELDS = ['cognome','nome','azienda','stato dipendente','mansione',
       'data di nascita','luogo di nascita','codice fiscale','data assunzione'];
 
+    // Gruppi di campi EQUIVALENTI che rappresentano lo stesso dato ma con nomi diversi
+    // in tabelle diverse (es. "Telefono Cellulare" in Dipendenti = "Recapito telefonico"
+    // in Sorveglianza). Ogni gruppo è un array di nomi lowercase considerati intercambiabili:
+    // se uno qualsiasi viene compilato/modificato, il valore si propaga a tutti gli altri.
+    const FIELD_ALIAS_GROUPS = [
+      ['telefono cellulare', 'recapito telefonico'],
+    ];
+
     // Mappa: campo lowercase → valore preso dalla riga appena salvata (sourceRow),
     // usando la chiave reale presente lì (case-insensitive)
     const sourceKeyByLower = {};
@@ -125,7 +133,19 @@ const Store = {
         valuesToSync[fieldLower] = sourceRow[realKey];
       }
     });
-    if(!Object.keys(valuesToSync).length) return;
+    // Per ogni gruppo di alias, se la riga sorgente ha compilato UNO dei nomi del gruppo,
+    // quel valore va sincronizzato verso TUTTI i nomi del gruppo (non solo verso lo stesso nome)
+    const aliasValuesToSync = []; // array di {names:[...], value}
+    FIELD_ALIAS_GROUPS.forEach(group=>{
+      for(const fieldLower of group){
+        const realKey = sourceKeyByLower[fieldLower];
+        if(realKey && sourceRow[realKey] !== '' && sourceRow[realKey] !== undefined){
+          aliasValuesToSync.push({ names: group, value: sourceRow[realKey] });
+          break; // basta il primo trovato nella riga sorgente
+        }
+      }
+    });
+    if(!Object.keys(valuesToSync).length && !aliasValuesToSync.length) return;
 
     ['dipendenti','contratti','formazione','sorveglianza'].forEach(targetTable=>{
       const rows = this.data[targetTable]?.rows;
@@ -143,6 +163,17 @@ const Store = {
           const realKey = keyByLower[fieldLower];
           if(!realKey) return; // questa tabella non ha questo campo: salta
           if(r[realKey] !== val){ r[realKey] = val; changed = true; }
+        });
+
+        // Applica i gruppi di alias: scrive il valore su QUALSIASI nome del gruppo
+        // presente in questa riga (es. sia "Telefono Cellulare" che "Recapito telefonico"
+        // se per qualche motivo entrambi esistessero nella stessa tabella)
+        aliasValuesToSync.forEach(({names, value})=>{
+          names.forEach(fieldLower=>{
+            const realKey = keyByLower[fieldLower];
+            if(!realKey) return;
+            if(r[realKey] !== value){ r[realKey] = value; changed = true; }
+          });
         });
       });
       if(changed) this.save(targetTable);
@@ -168,7 +199,26 @@ const Store = {
     if(!this.data['dipendenti'].columns || !this.data['dipendenti'].columns.length){
       this.data['dipendenti'].columns = JSON.parse(JSON.stringify(EMBEDDED_DATA['dipendenti'].columns));
     }
-    const newDip = { 'N° Socio': nSocioRaw, 'Cognome': sourceRow['Cognome']||'', 'Nome': sourceRow['Nome']||'', 'Azienda': sourceRow['Azienda']||'' };
+    // Copia tutti i campi condivisi disponibili nella riga sorgente (non solo Cognome/Nome/
+    // Azienda), così se importi prima Sorveglianza o Formazione (che magari hanno già Codice
+    // Fiscale, Data di Nascita ecc.), questi dati non vengono persi creando il Dipendente —
+    // verranno comunque sincronizzati correttamente verso le altre tabelle dopo la creazione.
+    const sourceKeyByLower = {};
+    Object.keys(sourceRow).forEach(k=>{ sourceKeyByLower[k.toLowerCase().trim()] = k; });
+    const SHARED_FIELDS_MAP = {
+      'cognome':'Cognome', 'nome':'Nome', 'azienda':'Azienda',
+      'stato dipendente':'Stato Dipendente', 'mansione':'Mansione',
+      'data di nascita':'Data di Nascita', 'luogo di nascita':'Luogo di Nascita',
+      'codice fiscale':'Codice Fiscale', 'data assunzione':'Data assunzione',
+      'telefono cellulare':'Telefono Cellulare', 'recapito telefonico':'Telefono Cellulare',
+    };
+    const newDip = { 'N° Socio': nSocioRaw };
+    Object.entries(SHARED_FIELDS_MAP).forEach(([srcKeyLower, dipField])=>{
+      const realKey = sourceKeyByLower[srcKeyLower];
+      if(realKey && sourceRow[realKey] && newDip[dipField]===undefined){
+        newDip[dipField] = sourceRow[realKey];
+      }
+    });
     this.addRow('dipendenti', newDip);
     console.log('_ensureDipendenteExists: creato nuovo dipendente per N° Socio', nSocioRaw);
   },
@@ -406,6 +456,29 @@ const Allegati = {
       .filter(p=>/^https?:\/\//i.test(p) && /\.pdf/i.test(p));
   },
 
+  // Ritorna l'insieme dei nomi originali (originalName) già presenti come allegati per
+  // questo record/slot, usato per evitare di riscaricare lo stesso PDF più volte
+  // (es. import eseguito più volte, o stesso dato recuperato da più fonti diverse).
+  // Applica la STESSA sanitizzazione usata dal server (vedi server.js, route
+  // /files/import-from-url) prima di confrontare i nomi: senza questo, il confronto tra il
+  // nome "grezzo" dell'URL e il nome realmente salvato su disco (sanificato) non corrisponde
+  // mai, e il controllo duplicati risulta sempre negativo.
+  _sanitizeFilename(name){
+    return String(name||'').replace(/[^a-zA-Z0-9._\- ]/g, '_');
+  },
+
+  async _getExistingAttachmentNames(recordId, slot){
+    const names = new Set();
+    try{
+      const r = await fetch(`${this.base()}/files/${recordId}/${slot}`);
+      if(r.ok){
+        const files = await r.json();
+        files.forEach(f => names.add(f.originalName));
+      }
+    }catch(e){ /* in caso di errore, procede comunque con il download */ }
+    return names;
+  },
+
   // Durante l'import Excel: per ogni colonna nota con link PDF (vedi PDF_LINK_COLUMNS),
   // scarica i file dal vecchio sistema (QuintaDB) e li allega al record appena creato sul NAS.
   // Ritorna {ok, fail} con i conteggi.
@@ -416,14 +489,27 @@ const Allegati = {
     const colMap = PDF_LINK_COLUMNS[table];
     if(!colMap) return {ok:0, fail:0};
 
-    let ok=0, fail=0;
+    let ok=0, fail=0, skippedDup=0;
     for(const [colName, slot] of Object.entries(colMap)){
       const cellValue = rawRow[colName];
       if(cellValue===undefined || cellValue===null || !String(cellValue).trim()) continue;
       const urls = this._extractPdfUrls(cellValue);
+      if(!urls.length) continue;
+
+      // Controlla quali allegati esistono già per questo record/slot, per evitare di
+      // scaricare di nuovo lo stesso PDF se l'import viene eseguito più volte (es. import
+      // di Dipendenti che recupera dati nascosti, seguito dall'import del file dedicato
+      // della stessa tabella, oppure un Excel importato due volte per errore).
+      let existingNames = await this._getExistingAttachmentNames(recordId, slot);
+
       for(const url of urls){
+        const originalName = decodeURIComponent(url.split('/').pop()||'allegato.pdf');
+        const sanitizedName = this._sanitizeFilename(originalName);
+        if(existingNames.has(sanitizedName)){
+          skippedDup++;
+          continue; // già presente: non lo riscarica
+        }
         try{
-          const originalName = decodeURIComponent(url.split('/').pop()||'allegato.pdf');
           const r = await fetch(`${base}/files/import-from-url/${recordId}/${slot}`, {
             method:'POST',
             headers:{'Content-Type':'application/json'},
@@ -431,6 +517,7 @@ const Allegati = {
           });
           if(r.ok){
             ok++;
+            existingNames.add(sanitizedName); // evita doppio download nello stesso giro, se l'url si ripete
           } else {
             fail++;
             const errBody = await r.text().catch(()=>'');
@@ -442,13 +529,18 @@ const Allegati = {
         }
       }
     }
-    return {ok, fail};
+    return {ok, fail, skippedDup};
   },
 
   // Apri modale allegati per un record
   async openModal(table, recordId, slotDef){
     const { label, slot, single } = slotDef;
-    document.getElementById('modal-title').textContent = label;
+
+    // Usa un overlay DEDICATO e separato da quello del form (vedi index.html,
+    // #allegati-modal-overlay), così il form di Aggiungi/Modifica sottostante resta
+    // semplicemente nascosto ma vivo nel DOM — nessun dato inserito dall'utente viene perso,
+    // perché non tocchiamo mai #modal-body/#modal-title/#modal-footer del form.
+    document.getElementById('allegati-modal-title').textContent = label;
 
     const base = this.base();
     let files = [];
@@ -465,7 +557,7 @@ const Allegati = {
 
     const list = this._renderList(files, recordId, slot, base, single);
 
-    document.getElementById('modal-body').innerHTML = `
+    document.getElementById('allegati-modal-body').innerHTML = `
       <div style="margin-bottom:16px">
         ${single ? '<p style="font-size:13px;color:var(--text3);margin-bottom:12px">⚠ Caricando un nuovo file, quello precedente viene sostituito.</p>' : ''}
         <label class="btn btn-primary" style="cursor:pointer;display:inline-flex;align-items:center;gap:8px">
@@ -475,9 +567,16 @@ const Allegati = {
       </div>
       <div id="allegati-list-${slot}">${list}</div>`;
 
-    document.getElementById('modal-footer').innerHTML =
-      `<button class="btn btn-ghost" onclick="App.closeModal()">Chiudi</button>`;
-    App.openModal();
+    document.getElementById('allegati-modal-footer').innerHTML =
+      `<button class="btn btn-primary" onclick="Allegati.closeAndRestoreForm()">← Torna al modulo</button>`;
+    document.getElementById('allegati-modal-overlay').classList.add('open');
+  },
+
+  // Chiude la vista allegati. Il form sottostante non è mai stato toccato, quindi
+  // ricompare automaticamente con tutti i dati che l'utente aveva già inserito.
+  closeAndRestoreForm(e){
+    if(e && e.target !== document.getElementById('allegati-modal-overlay')) return;
+    document.getElementById('allegati-modal-overlay').classList.remove('open');
   },
 
   _renderList(files, recordId, slot, base, single){
@@ -818,6 +917,109 @@ const CustomLabels = {
   },
 };
 
+// ─── RICERCHE RAPIDE PERSONALIZZATE (solo admin) ───────────────────────────────
+// Permette di aggiungere nuove ricerche rapide, ed eliminare (nascondere) quelle
+// esistenti, senza dover modificare il codice. Salvate per tabella:
+// { added: [ {id, icon, label, desc, criteria} , ... ], removed: [id, id, ...] }
+const CustomQuickSearches = {
+  _cache: {},
+  base(){ return typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : ''; },
+
+  async load(t){
+    if(this._cache[t]) return this._cache[t];
+    const base = this.base();
+    if(base){
+      try{
+        const r = await fetch(`${base}/api/qscustom_${t}`);
+        if(r.ok){
+          const data = await r.json();
+          if(data && (Array.isArray(data.added) || Array.isArray(data.removed))){
+            const val = { added: data.added||[], removed: data.removed||[] };
+            this._cache[t] = val;
+            localStorage.setItem('qscustom_'+t, JSON.stringify(val));
+            return val;
+          }
+        }
+      }catch(e){ console.warn('CustomQuickSearches.load: NAS non raggiungibile, uso locale', e.message); }
+    }
+    const local = localStorage.getItem('qscustom_'+t);
+    if(local){
+      try{ this._cache[t] = JSON.parse(local); return this._cache[t]; }catch{}
+    }
+    this._cache[t] = { added: [], removed: [] };
+    return this._cache[t];
+  },
+
+  async save(t, val){
+    this._cache[t] = val;
+    localStorage.setItem('qscustom_'+t, JSON.stringify(val));
+    const base = this.base();
+    if(base){
+      try{
+        await fetch(`${base}/api/qscustom_${t}`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(val)
+        });
+      }catch(e){ console.warn('CustomQuickSearches.save: sync NAS fallita', e.message); }
+    }
+  },
+
+  get(t){
+    return this._cache[t] || { added: [], removed: [] };
+  },
+
+  async addSearch(t, searchDef){
+    const val = this.get(t);
+    val.added.push(searchDef);
+    await this.save(t, val);
+  },
+
+  async updateSearch(t, searchId, searchDef){
+    const val = this.get(t);
+    const idx = val.added.findIndex(s=>s.id===searchId);
+    if(idx>=0) val.added[idx] = searchDef;
+    await this.save(t, val);
+  },
+
+  async removeSearch(t, searchId, isCustom){
+    const val = this.get(t);
+    if(isCustom){
+      // Ricerca personalizzata creata dall'admin: ogni variante (azienda/tutte) è generata
+      // dinamicamente da un'unica definizione "base" salvata in "added" — non possiamo
+      // eliminare solo una variante dall'array (non esiste come oggetto separato), quindi
+      // la nascondiamo comunque tramite "removed", usando il suo id specifico di variante.
+      if(!val.removed.includes(searchId)) val.removed.push(searchId);
+    } else {
+      // Ricerca predefinita nel codice: nasconde SOLO la variante specifica cliccata
+      // (es. "form_scadenza_mese_aliante"), lasciando intatte le altre aziende e "Tutte".
+      if(!val.removed.includes(searchId)) val.removed.push(searchId);
+    }
+    await this.save(t, val);
+  },
+
+  async restoreSearch(t, searchId){
+    const val = this.get(t);
+    val.removed = val.removed.filter(id=>id!==searchId);
+    await this.save(t, val);
+  },
+
+  // Ritorna l'elenco completo e finale delle ricerche per la tabella t: quelle
+  // predefinite nel codice (escluse quelle rimosse dall'admin) + quelle personalizzate
+  // aggiunte dall'admin, ciascuna espansa con le varianti per-azienda come le altre.
+  // Il filtro lavora a livello di SINGOLA VARIANTE (s.id), non di gruppo: rimuovere
+  // "form_scadenza_mese_aliante" nasconde solo quella, non le altre aziende o "Tutte".
+  getFullList(t, defaultSearches){
+    const val = this.get(t);
+    const baseFiltered = defaultSearches.filter(s => !val.removed.includes(s.id));
+    const customExpanded = val.added.flatMap(b => [
+      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:(b.desc||'')+' (tutte le aziende)', _isCustomBase:true, _customBaseId:b.id },
+      ...perCompanyVariants(b).map(v=>({...v, _isCustomBase:true, _customBaseId:b.id})),
+    ]).filter(s => !val.removed.includes(s.id));
+    return [...baseFiltered, ...customExpanded];
+  },
+};
+
 
 const SKIP = new Set(['_id','Riepilogo Dipendente','Riepilogo Dati contrattuali','Riepilogo Formazione',
   'Riepilogo Sorveglianza Sanitaria','Allegati documenti permesso','Allegati formazione (Attestati)',
@@ -1128,7 +1330,7 @@ const App = {
         (Auth.can('stats')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.openStats()">📊 Statistiche per Anno</button>':'')+
         '<button class="btn btn-ghost" style="font-size:13px" onclick="App.exportGestionale()">↓ Esporta Gestionale</button>' +
         '<button class="btn btn-primary" style="font-size:13px" onclick="App.importGestionale()">📂 Importa Gestionale</button>' +
-        (Auth.can('manage_users')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.cleanupEmptyAttachments()" title="Rimuove allegati PDF da 0 byte rimasti da download falliti">🧹 Pulisci Allegati Vuoti</button>':'');
+        (Auth.can('manage_users')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.cleanupEmptyAttachments()" title="Rimuove allegati PDF da 0 byte e i duplicati (mantenendo solo la copia più recente)">🧹 Pulisci Allegati</button>':'');
       topbarEl.appendChild(btnWrap);
     }
 
@@ -2209,12 +2411,15 @@ const App = {
   async cleanupEmptyAttachments(){
     const base = typeof NAS_API !== 'undefined' ? NAS_API.replace('/api','') : '';
     if(!base){ toast('Funzione disponibile solo con NAS configurato','error'); return; }
-    if(!confirm('Rimuovere tutti gli allegati PDF da 0 byte (rotti)? Questa operazione non è reversibile.')) return;
+    if(!confirm('Rimuovere tutti gli allegati PDF da 0 byte (rotti) e i PDF duplicati (mantenendo solo la copia più recente di ognuno)? Questa operazione non è reversibile.')) return;
     try{
       const r = await fetch(`${base}/files/cleanup-empty`, { method:'DELETE' });
       const data = await r.json();
       if(r.ok){
-        toast(`Pulizia completata: ${data.removed} file vuoti rimossi`, data.removed>0?'success':'success');
+        const parts = [];
+        if(data.removedEmpty) parts.push(`${data.removedEmpty} file vuoti`);
+        if(data.removedDup) parts.push(`${data.removedDup} duplicati`);
+        toast(parts.length ? `Pulizia completata: rimossi ${parts.join(' e ')}` : 'Pulizia completata: nessun file da rimuovere');
       } else {
         toast('Errore pulizia: '+(data.error||'sconosciuto'),'error');
       }
@@ -2672,8 +2877,8 @@ const App = {
   // Per ogni riga importata, scarica eventuali PDF collegati (vecchi link QuintaDB) e li allega.
   // Mostra un toast di riepilogo al termine. Richiede NAS configurato; altrimenti viene saltato.
   async _importAttachmentsForRows(t, pairs){
-    if(!PDF_LINK_COLUMNS[t]) return;
-    if(!Allegati.base()) return; // nessun NAS configurato: niente da scaricare
+    if(!PDF_LINK_COLUMNS[t]){ console.log('_importAttachmentsForRows: nessuna colonna PDF nota per', t); return; }
+    if(!Allegati.base()){ console.log('_importAttachmentsForRows: NAS non configurato, salto'); return; }
 
     const hasAnyLink = pairs.some(p=>
       Object.keys(PDF_LINK_COLUMNS[t]).some(col=>{
@@ -2681,10 +2886,20 @@ const App = {
         return v && Allegati._extractPdfUrls(v).length>0;
       })
     );
-    if(!hasAnyLink) return;
+    console.log('_importAttachmentsForRows: tabella', t, '- righe totali', pairs.length, '- hasAnyLink:', hasAnyLink);
+    if(!hasAnyLink){
+      // Diagnostica: mostra cosa c'era davvero nelle colonne attese, per capire perché non trova link
+      const sample = pairs[0]?.rawRow;
+      if(sample){
+        Object.keys(PDF_LINK_COLUMNS[t]).forEach(col=>{
+          console.log('  colonna "'+col+'" nella prima riga:', JSON.stringify(sample[col]));
+        });
+      }
+      return;
+    }
 
     toast(`Download allegati PDF in corso (potrebbe richiedere qualche minuto)...`);
-    let totalOk=0, totalFail=0, rowsWithLinks=0;
+    let totalOk=0, totalFail=0, totalSkippedDup=0, rowsWithLinks=0;
     const failedRecords = [];
     for(const {row, rawRow} of pairs){
       const hasLink = Object.keys(PDF_LINK_COLUMNS[t]).some(col=>{
@@ -2695,13 +2910,14 @@ const App = {
       const result = await Allegati.importFromRow(t, rawRow, row._id);
       totalOk += result.ok||0;
       totalFail += result.fail||0;
+      totalSkippedDup += result.skippedDup||0;
       if(result.fail>0){
         const nome = `${rawRow['Cognome']||''} ${rawRow['Nome']||''}`.trim() || row._id;
         failedRecords.push(`${nome} (${result.fail} falliti)`);
       }
     }
     if(rowsWithLinks>0){
-      toast(`Allegati importati: ${totalOk} ok${totalFail?`, ${totalFail} falliti`:''} (${rowsWithLinks} record con link)`, totalFail?'error':'success');
+      toast(`Allegati importati: ${totalOk} ok${totalFail?`, ${totalFail} falliti`:''}${totalSkippedDup?`, ${totalSkippedDup} già presenti (saltati)`:''} (${rowsWithLinks} record con link)`, totalFail?'error':'success');
       if(failedRecords.length){
         console.warn('Record con almeno un allegato fallito:', failedRecords);
         toast(`Allegati falliti per: ${failedRecords.slice(0,5).join(', ')}${failedRecords.length>5?` e altri ${failedRecords.length-5}`:''} — vedi console per dettagli`, 'error');
@@ -2819,15 +3035,19 @@ const App = {
             const cellValue = dataRow[keys[colIdx]];
             if(!cellValue || !String(cellValue).trim()) continue;
             const urls = Allegati._extractPdfUrls(cellValue);
+            if(!urls.length) continue;
+            const existingNames = await Allegati._getExistingAttachmentNames(recordId, slot);
             for(const url of urls){
+              const originalName = decodeURIComponent(url.split('/').pop()||'allegato.pdf');
+              const sanitizedName = Allegati._sanitizeFilename(originalName);
+              if(existingNames.has(sanitizedName)){ continue; } // già presente: non lo riscarica
               try{
-                const originalName = decodeURIComponent(url.split('/').pop()||'allegato.pdf');
                 const r = await fetch(`${Allegati.base()}/files/import-from-url/${recordId}/${slot}`, {
                   method:'POST',
                   headers:{'Content-Type':'application/json'},
                   body: JSON.stringify({url, originalName})
                 });
-                if(r.ok) attachOk++; else attachFail++;
+                if(r.ok){ attachOk++; existingNames.add(sanitizedName); } else attachFail++;
               }catch(e){
                 console.warn('_syncNestedTablesFromDipendenti: errore download allegato', url, e.message);
                 attachFail++;
@@ -2913,6 +3133,7 @@ window.addEventListener('keydown',e=>App.handleKey(e));
   try{ await Store.load(); }catch(e){ console.error('Store error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','aziende'].map(t=>CustomLayout.load(t))); }catch(e){ console.warn('CustomLayout boot load error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','dashboard'].map(t=>CustomLabels.load(t))); }catch(e){ console.warn('CustomLabels boot load error:',e); }
+  try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza'].map(t=>CustomQuickSearches.load(t))); }catch(e){ console.warn('CustomQuickSearches boot load error:',e); }
   document.getElementById('loading').classList.add('hidden');
   const _sess=Auth.current();
   if(_sess){ document.getElementById('login-screen').style.display='none'; App.initApp(_sess); }
@@ -3397,9 +3618,8 @@ App.renderTable = function(t){
   const allPageSelected = pageIds.length>0 && pageIds.every(id=>this.selected.has(id));
 
   const ths=`<th style="width:34px"><input type="checkbox" ${allPageSelected?'checked':''} onchange="App.toggleSelectAllPage('${t}',this.checked)" title="Seleziona tutti in questa pagina"/></th>`+
-    cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('')+
-    `<th style="width:100px;cursor:pointer" onclick="App.sortCol=null;App.sortDir=1;App.renderTable('${t}')" title="Torna all'ordine di inserimento">
-      ${!this.sortCol?'🕒 Inserimento':'↺'}</th>`;
+    `<th style="width:100px">Azioni</th>`+
+    cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('');
   // Per Dipendenti, Stato Dipendente e Mansione vengono sincronizzati dal contratto
   // associato (per N° Socio) anche nella vista a elenco, non solo nel form di modifica.
   const normalizeNSocioList = s => String(s||'').trim().replace(',', '.').toUpperCase();
@@ -3430,8 +3650,9 @@ App.renderTable = function(t){
     const actView=`<button class="icon-btn view" title="Visualizza" onclick="App.openView('${t}',${oi})">👁</button>`;
     const actMod=Auth.can('edit')?`<button class="icon-btn" title="Modifica" onclick="App.openEdit('${t}',${oi})">✎</button>`:'';
     const actDel=Auth.can('delete')?`<button class="icon-btn danger" title="Elimina" onclick="App.confirmDelete('${t}',${oi})">✕</button>`:'';
+    const actionsTd=`<td><div class="td-actions">${actView}${actMod}${actDel}</div></td>`;
     const checkboxTd=`<td><input type="checkbox" ${isSel?'checked':''} onchange="App.toggleSelectRow('${t}','${row._id}',this.checked)"/></td>`;
-    return`<tr class="${isSel?'row-selected':''}">${checkboxTd}${tds}<td><div class="td-actions">${actView}${actMod}${actDel}</div></td></tr>`;
+    return`<tr class="${isSel?'row-selected':''}">${checkboxTd}${actionsTd}${tds}</tr>`;
   }).join('')||'<tr><td colspan="99" style="text-align:center;color:var(--text3);padding:36px">Nessun risultato</td></tr>';
 
   const selCount = this.selected.size;
@@ -3451,6 +3672,7 @@ App.renderTable = function(t){
       <div class="table-toolbar">
         <span style="font-size:14px;color:var(--text2);font-weight:600">${meta.label}${advBadge}</span>
         ${resetBtn}
+        ${this.sortCol?`<button class="btn btn-ghost" style="font-size:12px" onclick="App.sortCol=null;App.sortDir=1;App.renderTable('${t}')" title="Torna all'ordine di inserimento">↺ Ordine inserimento</button>`:''}
         <span class="record-count">${this.filter||advCount?tot+' filtrati / ':''}${all.length} totali</span>
         ${Auth.can('quick_search')?`<button class="btn btn-ghost" style="font-size:13px;background:var(--accent);color:#fff;border-color:var(--accent)" onclick="App.openQuickSearches('${t}')">⚡ Ricerche Rapide</button>`:''}
         ${Auth.can('adv_search')?`<button class="btn btn-ghost" style="font-size:13px;border-color:var(--accent);color:var(--accent)" onclick="App.openAdvSearch('${t}')">🔍 Ricerca Avanzata</button>`:''}
@@ -3508,6 +3730,7 @@ function perCompanyVariants(base){
     // Se la ricerca usa un customFilter, lo manteniamo identico ma aggiungiamo il filtro azienda
     // come ulteriore step applicato dopo (vedi applyCustomFilter, che lo gestisce per nome chiave).
     _companyFilter: base.customFilter ? short : undefined,
+    _baseId: base.id, // preserva sempre l'id originale, per identificare correttamente la ricerca "madre"
   }));
 }
 
@@ -3684,44 +3907,22 @@ const QUICK_SEARCHES = {
         cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Stato Dipendente','Mansione','Appalto / sede di lavoro','Tipologia Corso','Scadenza Corso','Stato Corso'],
         criteria:[
           {field:'Scadenza Corso', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
-          {field:'Stato Corso',    fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND'},
         ]
       },
       {
         id:'form_corso_base', icon:'📅',
-        label:'Scadenzario Corso Base — Mese Corrente e Prossimo',
+        label:'Scadenzario Formazione CORSO BASE — Mese Corrente e Prossimo',
         desc:'Corso Base in scadenza nei prossimi 60 giorni',
         table:'formazione',
-        cols:['Cognome','Nome','Mansione','Stato Dipendente','Appalto / sede di lavoro','Tipologia Corso','Scadenza Corso','Azienda'],
+        cols:['Cognome','Nome','Mansione','Stato Dipendente','Appalto / sede di lavoro','Data di nascita','Luogo di nascita','Codice Fiscale','Data assunzione','Azienda'],
         criteria:[
           {field:'Tipologia Corso', fieldDef:{type:'select'}, op:'is', val1:'Corso Base', val2:'', connector:'AND'},
           {field:'Scadenza Corso',  fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
         ]
       },
-      {
-        id:'form_da_completare', icon:'⏳',
-        label:'Formazione Da Completare',
-        desc:'Corsi con stato "Da completare"',
-        table:'formazione',
-        cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso'],
-        criteria:[
-          {field:'Stato Corso', fieldDef:{type:'select'}, op:'is', val1:'Da completare', val2:'', connector:'AND'},
-        ]
-      },
-      {
-        id:'form_scaduti', icon:'🔴',
-        label:'Formazione Scaduta',
-        desc:'Corsi con scadenza già passata',
-        table:'formazione',
-        cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Scadenza Corso','Stato Corso'],
-        criteria:[
-          {field:'Scadenza Corso', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND'},
-          {field:'Stato Corso',    fieldDef:{type:'select'}, op:'is', val1:'Completato', val2:'', connector:'AND'},
-        ]
-      },
     ];
     return bases.flatMap(b => [
-      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:b.desc+' (tutte le aziende)' },
+      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:b.desc+' (tutte le aziende)', _baseId:b.id },
       ...perCompanyVariants(b),
     ]);
   })(),
@@ -3732,44 +3933,22 @@ const QUICK_SEARCHES = {
         label:'Scadenze Idoneità — Mese Corrente e Prossimo',
         desc:'Visite con scadenza nei prossimi 60 giorni',
         table:'sorveglianza',
-        cols:['Azienda','Cognome','Nome','Mansione','Appalto / sede di lavoro','Data assunzione','Scadenza Idoneità','Stato idoneità','Data Analisi','Note'],
+        cols:['Azienda','Cognome','Nome','Mansione','Appalto / sede di lavoro','Data assunzione','Scadenza Idoneità','Stato idoneità','Data Analisi','Recapito telefonico','Note'],
         criteria:[
           {field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'next_60_days', val1:'', val2:'', connector:'AND'},
         ]
       },
       {
-        id:'sorv_scaduti', icon:'🔴',
-        label:'Idoneità Scaduta',
-        desc:'Dipendenti con scadenza idoneità già passata',
+        id:'sorv_report_medico', icon:'🩺',
+        label:'Report per Medico del Lavoro',
+        desc:'Anagrafica completa dipendenti per il medico competente',
         table:'sorveglianza',
-        cols:['Azienda','Cognome','Nome','Mansione','Scadenza Idoneità','Stato idoneità','Medico'],
-        criteria:[
-          {field:'Scadenza Idoneità', fieldDef:{type:'date'}, op:'before', val1:new Date().toISOString().slice(0,10), val2:'', connector:'AND'},
-        ]
-      },
-      {
-        id:'sorv_prescrizioni', icon:'🟡',
-        label:'Idonei con Prescrizioni',
-        desc:'Dipendenti con prescrizioni mediche',
-        table:'sorveglianza',
-        cols:['Azienda','Cognome','Nome','Mansione','Scadenza Idoneità','Stato idoneità','Note prescrizione','Medico'],
-        criteria:[
-          {field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'prescrizioni', val2:'', connector:'AND'},
-        ]
-      },
-      {
-        id:'sorv_in_attesa', icon:'🔵',
-        label:'In Attesa di Visita',
-        desc:'Dipendenti in attesa di visita medica',
-        table:'sorveglianza',
-        cols:['Azienda','Cognome','Nome','Mansione','Data visita medica','Scadenza Idoneità','Stato idoneità'],
-        criteria:[
-          {field:'Stato idoneità', fieldDef:{type:'select'}, op:'contains', val1:'attesa', val2:'', connector:'AND'},
-        ]
+        cols:['Cognome','Nome','Azienda','Mansione','Data di nascita','Luogo di nascita','Codice fiscale','Data assunzione','Recapito telefonico'],
+        criteria:[]
       },
     ];
     return bases.flatMap(b => [
-      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:b.desc+' (tutte le aziende)' },
+      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:b.desc+' (tutte le aziende)', _baseId:b.id },
       ...perCompanyVariants(b),
     ]);
   })(),
@@ -3807,7 +3986,7 @@ const QUICK_SEARCHES = {
       },
     ];
     return bases.flatMap(b => [
-      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:b.desc+' (tutte le aziende)' },
+      { ...b, id:b.id+'_tutte', label:b.label+' — Tutte le Aziende', desc:b.desc+' (tutte le aziende)', _baseId:b.id },
       ...perCompanyVariants(b),
     ]);
   })(),
@@ -3866,13 +4045,13 @@ function applyCustomFilter(key, rows, companyFilter){
 
 // ── Quick search modal ────────────────────────────────────────────────────────
 App.openQuickSearches = function(t){
-  const searches = QUICK_SEARCHES[t] || [];
+  const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
   const meta = TABLE_META[t];
-  if(!searches.length){ toast('Nessuna ricerca rapida per questa tabella','error'); return; }
+  if(!searches.length && !Auth.isAdmin()){ toast('Nessuna ricerca rapida per questa tabella','error'); return; }
 
   document.getElementById('modal-title').textContent = '⚡ Ricerche Rapide — '+meta.label;
 
-  let html = '<div class="quick-search-grid">';
+  let html = searches.length ? '<div class="quick-search-grid">' : '<p style="color:var(--text3);font-size:13px;padding:20px 0;text-align:center">Nessuna ricerca rapida configurata per questa tabella.</p>';
   searches.forEach(s => {
     const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
     const srcRows = Store.getRows(s.table || t);
@@ -3880,20 +4059,27 @@ App.openQuickSearches = function(t){
     if(s.customFilter) matched = applyCustomFilter(s.customFilter, matched, s._companyFilter);
     const count = matched.length;
     const displayLabel = CustomLabels.get(t, s.id, s.label);
+    const isCustom = !!s._isCustomBase;
     html += `
       <div class="quick-card" style="position:relative" onclick="App.runQuickSearch('${t}','${s.id}')">
-        ${Auth.isAdmin()?`<button class="icon-btn" title="Rinomina" style="position:absolute;top:6px;right:6px;background:#fff"
-          onclick="event.stopPropagation();App.renameQuickSearch('${t}','${s.id}')">✏</button>`:''}
+        ${Auth.isAdmin()?`<div style="position:absolute;top:6px;right:6px;display:flex;gap:3px">
+          <button class="icon-btn" title="Rinomina" style="background:#fff"
+            onclick="event.stopPropagation();App.renameQuickSearch('${t}','${s.id}')">✏</button>
+          <button class="icon-btn danger" title="Rimuovi" style="background:#fff"
+            onclick="event.stopPropagation();App.removeQuickSearch('${t}','${s.id}',${isCustom})">🚫</button>
+        </div>`:''}
         <div class="quick-card-icon">${s.icon}</div>
         <div class="quick-card-label">${esc(displayLabel)}</div>
         <div class="quick-card-desc">${esc(s.desc)}</div>
         <div class="quick-card-count">${count} record</div>
       </div>`;
   });
-  html += '</div>';
+  if(searches.length) html += '</div>';
 
   document.getElementById('modal-body').innerHTML = html;
   document.getElementById('modal-footer').innerHTML =
+    (Auth.isAdmin()?`<button class="btn btn-primary" onclick="App.openQuickSearchEditor('${t}')">➕ Nuova Ricerca</button>
+     ${App._hiddenQuickSearchesCount(t) ? `<button class="btn btn-ghost" onclick="App.showHiddenQuickSearches('${t}')">↺ Ricerche rimosse (${App._hiddenQuickSearchesCount(t)})</button>` : ''}`:'') +
     `<button class="btn btn-ghost" onclick="App.closeModal()">Chiudi</button>`;
   App.openModal();
 };
@@ -3902,7 +4088,7 @@ App.openQuickSearches = function(t){
 // Lasciare vuoto ripristina il nome originale.
 App.renameQuickSearch = async function(t, searchId){
   if(!Auth.isAdmin()){ toast('Funzione riservata agli amministratori','error'); return; }
-  const searches = QUICK_SEARCHES[t] || [];
+  const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
   const s = searches.find(x => x.id === searchId);
   if(!s) return;
   if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
@@ -3912,6 +4098,159 @@ App.renameQuickSearch = async function(t, searchId){
   await CustomLabels.rename(t, searchId, newLabel);
   toast(newLabel.trim() ? 'Nome aggiornato ✓' : 'Nome ripristinato al default');
   App.openQuickSearches(t);
+};
+
+// Rimuove (nasconde) una ricerca rapida. Per quelle predefinite nel codice, le marca come
+// "removed" (recuperabili); per quelle create dall'admin, le elimina davvero.
+App.removeQuickSearch = async function(t, searchId, isCustom){
+  if(!Auth.isAdmin()){ toast('Funzione riservata agli amministratori','error'); return; }
+  if(!confirm('Rimuovere questa ricerca rapida?')) return;
+  await CustomQuickSearches.removeSearch(t, searchId, isCustom);
+  toast('Ricerca rapida rimossa');
+  App.openQuickSearches(t);
+};
+
+App._hiddenQuickSearchesCount = function(t){
+  return CustomQuickSearches.get(t).removed.length;
+};
+
+App.showHiddenQuickSearches = function(t){
+  const removed = CustomQuickSearches.get(t).removed;
+  if(!removed.length){ toast('Nessuna ricerca rimossa','error'); return; }
+  const baseSearches = QUICK_SEARCHES[t] || []; // già espanso con tutte le varianti per azienda
+  const items = removed.map(id => {
+    const match = baseSearches.find(s => s.id === id);
+    return { id, label: match ? CustomLabels.get(t, match.id, match.label) : id };
+  });
+  document.getElementById('modal-title').textContent = '↺ Ricerche Rapide Rimosse';
+  document.getElementById('modal-body').innerHTML = items.map(it=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
+      <span style="font-size:13px">${esc(it.label)}</span>
+      <button class="btn btn-ghost" style="font-size:12px" onclick="App.restoreQuickSearch('${t}','${it.id}')">↺ Ripristina</button>
+    </div>`).join('');
+  document.getElementById('modal-footer').innerHTML = `<button class="btn btn-ghost" onclick="App.openQuickSearches('${t}')">← Torna alle ricerche</button>`;
+  App.openModal();
+};
+
+App.restoreQuickSearch = async function(t, searchId){
+  await CustomQuickSearches.restoreSearch(t, searchId);
+  toast('Ricerca rapida ripristinata ✓');
+  App.showHiddenQuickSearches(t);
+};
+
+// ── Editor di creazione/modifica per le ricerche rapide personalizzate (solo admin) ──
+App._qsEditState = null; // {table, id, icon, label, desc, criteria:[{field,op,val1,val2}]}
+
+App.openQuickSearchEditor = function(t, existingId){
+  if(!Auth.isAdmin()){ toast('Funzione riservata agli amministratori','error'); return; }
+  let editing = null;
+  if(existingId){
+    const val = CustomQuickSearches.get(t);
+    editing = val.added.find(s=>s.id===existingId);
+  }
+  App._qsEditState = editing
+    ? { table:t, id:editing.id, icon:editing.icon||'⭐', label:editing.label, desc:editing.desc||'', criteria:JSON.parse(JSON.stringify(editing.criteria||[])) }
+    : { table:t, id:null, icon:'⭐', label:'', desc:'', criteria:[] };
+  App._renderQuickSearchEditor();
+};
+
+App._renderQuickSearchEditor = function(){
+  const st = App._qsEditState;
+  const fields = ADV_FIELDS[st.table] || [];
+  document.getElementById('modal-title').textContent = st.id ? '✎ Modifica Ricerca Rapida' : '➕ Nuova Ricerca Rapida';
+
+  const critRows = st.criteria.map((c, ci) => {
+    const fieldDef = fields.find(f=>f.field===c.field) || fields[0] || {type:'text'};
+    const opsList = fieldDef.type==='date' ? ADV_OPS_DATE : fieldDef.type==='select' ? ADV_OPS_SELECT : ADV_OPS_TEXT;
+    const needsVal = !['is_empty','is_not_empty'].includes(c.op);
+    return `
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <select style="flex:1;min-width:140px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px" onchange="App._qsCritFieldChange(${ci},this.value)">
+          ${fields.map(f=>`<option value="${esc(f.field)}" ${f.field===c.field?'selected':''}>${esc(f.label)}</option>`).join('')}
+        </select>
+        <select style="flex:1;min-width:120px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px" onchange="App._qsCritOpChange(${ci},this.value)">
+          ${opsList.map(o=>`<option value="${o.value}" ${o.value===c.op?'selected':''}>${esc(o.label)}</option>`).join('')}
+        </select>
+        ${needsVal?`<input type="${fieldDef.type==='date'?'date':'text'}" value="${esc(c.val1||'')}" placeholder="Valore"
+          style="flex:1;min-width:120px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px"
+          onchange="App._qsCritValChange(${ci},this.value)"/>`:''}
+        <button class="icon-btn danger" title="Rimuovi criterio" onclick="App._qsRemoveCrit(${ci})">✕</button>
+      </div>`;
+  }).join('');
+
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-group"><label class="field-label">Icona (emoji)</label>
+      <input type="text" id="qs-icon" value="${esc(st.icon)}" maxlength="4" style="width:70px;text-align:center;font-size:18px;padding:6px;border:1px solid var(--border);border-radius:6px"/></div>
+    <div class="form-group"><label class="field-label">Nome ricerca</label>
+      <input type="text" id="qs-label" value="${esc(st.label)}" placeholder="Es. Scadenze formazione prossimi 30 giorni"
+        style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"/></div>
+    <div class="form-group"><label class="field-label">Descrizione (opzionale)</label>
+      <input type="text" id="qs-desc" value="${esc(st.desc)}" placeholder="Breve descrizione mostrata sotto il titolo"
+        style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"/></div>
+    <div class="form-group">
+      <label class="field-label">Criteri di filtro (tutti applicati insieme, in AND)</label>
+      <div id="qs-criteria">${critRows || '<p style="color:var(--text3);font-size:12px">Nessun criterio: la ricerca mostrerà tutti i record.</p>'}</div>
+      <button class="btn btn-ghost" style="font-size:12px;margin-top:6px" onclick="App._qsAddCrit()">+ Aggiungi criterio</button>
+    </div>`;
+
+  document.getElementById('modal-footer').innerHTML = `
+    <button class="btn btn-ghost" onclick="App.openQuickSearches('${st.table}')">Annulla</button>
+    <button class="btn btn-primary" onclick="App._qsSave()">💾 Salva Ricerca</button>`;
+  App.openModal();
+};
+
+App._qsAddCrit = function(){
+  const fields = ADV_FIELDS[App._qsEditState.table] || [];
+  const f = fields[0];
+  if(!f) return;
+  const ops = f.type==='date' ? ADV_OPS_DATE : f.type==='select' ? ADV_OPS_SELECT : ADV_OPS_TEXT;
+  App._qsEditState.criteria.push({ field:f.field, fieldDef:{type:f.type, opts:f.opts}, op:ops[0].value, val1:'', val2:'', connector:'AND' });
+  App._renderQuickSearchEditor();
+};
+App._qsRemoveCrit = function(ci){
+  App._qsEditState.criteria.splice(ci,1);
+  App._renderQuickSearchEditor();
+};
+App._qsCritFieldChange = function(ci, fieldName){
+  const fields = ADV_FIELDS[App._qsEditState.table] || [];
+  const f = fields.find(x=>x.field===fieldName);
+  if(!f) return;
+  const ops = f.type==='date' ? ADV_OPS_DATE : f.type==='select' ? ADV_OPS_SELECT : ADV_OPS_TEXT;
+  App._qsEditState.criteria[ci] = { field:f.field, fieldDef:{type:f.type, opts:f.opts}, op:ops[0].value, val1:'', val2:'', connector:'AND' };
+  App._renderQuickSearchEditor();
+};
+App._qsCritOpChange = function(ci, op){
+  App._qsEditState.criteria[ci].op = op;
+  App._renderQuickSearchEditor();
+};
+App._qsCritValChange = function(ci, val){
+  App._qsEditState.criteria[ci].val1 = val;
+};
+
+App._qsSave = async function(){
+  const st = App._qsEditState;
+  const icon = document.getElementById('qs-icon').value.trim() || '⭐';
+  const label = document.getElementById('qs-label').value.trim();
+  const desc = document.getElementById('qs-desc').value.trim();
+  if(!label){ toast('Inserisci un nome per la ricerca','error'); return; }
+
+  const id = st.id || ('custom_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6));
+  const searchDef = {
+    id, icon, label, desc,
+    table: st.table,
+    cols: (ADV_FIELDS[st.table]||[]).map(f=>f.field), // mostra tutte le colonne note per questa tabella
+    criteria: st.criteria,
+  };
+
+  if(st.id){
+    await CustomQuickSearches.updateSearch(st.table, st.id, searchDef);
+    toast('Ricerca rapida aggiornata ✓');
+  } else {
+    await CustomQuickSearches.addSearch(st.table, searchDef);
+    toast('Ricerca rapida creata ✓');
+  }
+  App._qsEditState = null;
+  App.openQuickSearches(st.table);
 };
 
 // Rinomina (solo admin) una card della Dashboard. Lasciare vuoto ripristina il nome originale.
@@ -3927,7 +4266,7 @@ App.renameDashCard = async function(cardId, defaultLabel){
 
 // ── Run quick search → show results in styled table inside modal ──────────────
 App.runQuickSearch = function(t, id){
-  const searches = QUICK_SEARCHES[t] || [];
+  const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
   const s = searches.find(x => x.id === id);
   if(!s) return;
   if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
@@ -3990,7 +4329,7 @@ App.runQuickSearch = function(t, id){
 
 // ── Apply quick filter to main table ─────────────────────────────────────────
 App.applyQuickFilter = function(t, id){
-  const searches = QUICK_SEARCHES[t] || [];
+  const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
   const s = searches.find(x => x.id === id);
   if(!s) return;
   if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
@@ -4007,7 +4346,7 @@ App.applyQuickFilter = function(t, id){
 
 // ── Print quick result ────────────────────────────────────────────────────────
 App.printQuickResult = function(id, t){
-  const searches = QUICK_SEARCHES[t] || [];
+  const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
   const s = searches.find(x => x.id === id);
   if(!s) return;
   if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
@@ -4060,7 +4399,7 @@ App.printQuickResult = function(id, t){
 
 // ── Export quick result to Excel ──────────────────────────────────────────────
 App.exportQuickResult = function(id, t){
-  const searches = QUICK_SEARCHES[t] || [];
+  const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
   const s = searches.find(x => x.id === id);
   if(!s) return;
   if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
