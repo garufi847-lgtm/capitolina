@@ -3184,7 +3184,7 @@ const ADV_FIELDS = {
     { label:'Data inizio',         field:'Data inizio',                        type:'date' },
     { label:'Data fine',           field:'Data fine',                          type:'date' },
     { label:'Scadenza Contratto',  field:'Scadenza Contratto',                 type:'date' },
-    { label:'Data assunzione',     field:'Data assunzione',                    type:'date' },
+    { label:'Data assunzione',     field:'Data Assunzione',                    type:'date' },
     { label:'Causa fine rapporto', field:'Causa fine rapporto',                type:'select', opts:'causaFine' },
     { label:'Data fine rapporto',  field:'Data fine rapporto',                 type:'date' },
     { label:'Requisiti Incentivi', field:'Requisiti Incentivi',                type:'select', opts:'incentivi' },
@@ -4005,7 +4005,10 @@ function buildDynamicCriteria(dynamicKey){
     const fromISO = lastMon.toISOString().slice(0,10);
     const toISO   = lastSun.toISOString().slice(0,10);
     return [
+      // ENTRATE: dipendenti assunti nella settimana scorsa
       {field:'Data assunzione',      fieldDef:{type:'date'}, op:'between', val1:fromISO, val2:toISO, connector:'AND'},
+      // USCITE: dipendenti con data fine rapporto nella settimana scorsa (connector OR)
+      {field:'Data fine rapporto',   fieldDef:{type:'date'}, op:'between', val1:fromISO, val2:toISO, connector:'OR'},
     ];
   }
   return [];
@@ -4163,8 +4166,15 @@ App._renderQuickSearchEditor = function(){
     const fieldDef = fields.find(f=>f.field===c.field) || fields[0] || {type:'text'};
     const opsList = fieldDef.type==='date' ? ADV_OPS_DATE : fieldDef.type==='select' ? ADV_OPS_SELECT : ADV_OPS_TEXT;
     const needsVal = !['is_empty','is_not_empty'].includes(c.op);
+    // Il selettore AND/OR appare solo dal secondo criterio in poi (il primo non ha un connettore precedente)
+    const connectorSel = ci > 0 ? `
+      <select style="width:68px;flex-shrink:0;padding:6px;border:1px solid var(--accent);border-radius:6px;font-size:13px;font-weight:700;color:var(--accent);background:#eff6ff" onchange="App._qsCritConnectorChange(${ci},this.value)">
+        <option value="AND" ${(c.connector||'AND')==='AND'?'selected':''}>AND</option>
+        <option value="OR"  ${c.connector==='OR'?'selected':''}>OR</option>
+      </select>` : `<span style="width:68px;flex-shrink:0;font-size:11px;color:var(--text3);text-align:center">dove</span>`;
     return `
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        ${connectorSel}
         <select style="flex:1;min-width:140px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px" onchange="App._qsCritFieldChange(${ci},this.value)">
           ${fields.map(f=>`<option value="${esc(f.field)}" ${f.field===c.field?'selected':''}>${esc(f.label)}</option>`).join('')}
         </select>
@@ -4225,6 +4235,10 @@ App._qsCritOpChange = function(ci, op){
 };
 App._qsCritValChange = function(ci, val){
   App._qsEditState.criteria[ci].val1 = val;
+};
+App._qsCritConnectorChange = function(ci, connector){
+  App._qsEditState.criteria[ci].connector = connector;
+  // Non ridisegna il form (non è necessario, il valore è già nel select)
 };
 
 App._qsSave = async function(){
