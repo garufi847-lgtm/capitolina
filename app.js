@@ -4166,15 +4166,26 @@ App._renderQuickSearchEditor = function(){
     const fieldDef = fields.find(f=>f.field===c.field) || fields[0] || {type:'text'};
     const opsList = fieldDef.type==='date' ? ADV_OPS_DATE : fieldDef.type==='select' ? ADV_OPS_SELECT : ADV_OPS_TEXT;
     const needsVal = !['is_empty','is_not_empty'].includes(c.op);
-    // Il selettore AND/OR appare solo dal secondo criterio in poi (il primo non ha un connettore precedente)
-    const connectorSel = ci > 0 ? `
-      <select style="width:68px;flex-shrink:0;padding:6px;border:1px solid var(--accent);border-radius:6px;font-size:13px;font-weight:700;color:var(--accent);background:#eff6ff" onchange="App._qsCritConnectorChange(${ci},this.value)">
-        <option value="AND" ${(c.connector||'AND')==='AND'?'selected':''}>AND</option>
-        <option value="OR"  ${c.connector==='OR'?'selected':''}>OR</option>
-      </select>` : `<span style="width:68px;flex-shrink:0;font-size:11px;color:var(--text3);text-align:center">dove</span>`;
-    return `
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-        ${connectorSel}
+    const connector = c.connector || 'AND';
+
+    // Riga di separazione col connettore AND/OR, visibile solo dal secondo criterio in poi
+    const connectorRow = ci > 0 ? `
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0 4px 0">
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+        <button type="button"
+          onclick="App._qsCritConnectorChange(${ci})"
+          style="padding:3px 14px;border-radius:20px;border:2px solid ${connector==='AND'?'var(--accent)':'var(--danger)'};
+            background:${connector==='AND'?'#eff6ff':'#fef2f2'};
+            color:${connector==='AND'?'var(--accent)':'var(--danger)'};
+            font-weight:800;font-size:12px;cursor:pointer;min-width:54px"
+          title="Clicca per alternare tra AND e OR">
+          ${connector}
+        </button>
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+      </div>` : '';
+
+    return `${connectorRow}
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
         <select style="flex:1;min-width:140px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px" onchange="App._qsCritFieldChange(${ci},this.value)">
           ${fields.map(f=>`<option value="${esc(f.field)}" ${f.field===c.field?'selected':''}>${esc(f.label)}</option>`).join('')}
         </select>
@@ -4236,9 +4247,10 @@ App._qsCritOpChange = function(ci, op){
 App._qsCritValChange = function(ci, val){
   App._qsEditState.criteria[ci].val1 = val;
 };
-App._qsCritConnectorChange = function(ci, connector){
-  App._qsEditState.criteria[ci].connector = connector;
-  // Non ridisegna il form (non è necessario, il valore è già nel select)
+App._qsCritConnectorChange = function(ci){
+  const current = App._qsEditState.criteria[ci].connector || 'AND';
+  App._qsEditState.criteria[ci].connector = current === 'AND' ? 'OR' : 'AND';
+  App._renderQuickSearchEditor();
 };
 
 App._qsSave = async function(){
