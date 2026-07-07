@@ -3873,9 +3873,9 @@ const QUICK_SEARCHES = {
     {
       id:'entrate_uscite', icon:'📊',
       label:'Situazione Entrate / Uscite Dipendenti — Settimana Precedente',
-      desc:'Dipendenti assunti o cessati nella settimana precedente',
-      table:'dipendenti',
-      cols:['Azienda','Cognome','Nome','Data di Nascita','Luogo di Nascita','Codice Fiscale','Mansione','Stato Dipendente','Data assunzione','Data fine rapporto','Appalto / sede di lavoro'],
+      desc:'Dipendenti assunti o cessati nella settimana precedente (tutte le aziende)',
+      table:'contratti',
+      cols:['Azienda','Cognome','Nome','Mansione','Stato Dipendente','Data Assunzione','Data fine rapporto','Tipologia contrattuale'],
       criteria:[], // dynamic - computed at runtime
       dynamic: 'entrate_uscite',
     },
@@ -3999,19 +3999,22 @@ const QUICK_SEARCHES = {
 // ── Dynamic criteria helpers ──────────────────────────────────────────────────
 function buildDynamicCriteria(dynamicKey){
   if(dynamicKey === 'entrate_uscite'){
-    // Settimana precedente: da lunedi scorso a domenica scorsa
-    const now = new Date();
-    const dayOfWeek = now.getDay(); // 0=dom, 1=lun...
-    const daysToLastMon = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-    const lastMon = new Date(now); lastMon.setDate(now.getDate() - daysToLastMon - 7);
-    const lastSun = new Date(lastMon); lastSun.setDate(lastMon.getDate() + 6);
+    // Settimana precedente: da lunedì scorso a domenica scorsa.
+    // Esempio: oggi 07/07/2026 (martedì) → lastMon = 29/06/2026, lastSun = 05/07/2026
+    const now = new Date(); now.setHours(0,0,0,0);
+    const dayOfWeek = now.getDay(); // 0=dom, 1=lun, 2=mar...
+    const daysToLastMon = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // giorni dall'ultimo lunedì
+    const lastMon = new Date(now);
+    lastMon.setDate(now.getDate() - daysToLastMon - 7); // lunedì della settimana scorsa
+    const lastSun = new Date(lastMon);
+    lastSun.setDate(lastMon.getDate() + 6); // domenica della settimana scorsa
     const fromISO = lastMon.toISOString().slice(0,10);
     const toISO   = lastSun.toISOString().slice(0,10);
     return [
-      // ENTRATE: dipendenti assunti nella settimana scorsa
-      {field:'Data assunzione',      fieldDef:{type:'date'}, op:'between', val1:fromISO, val2:toISO, connector:'AND'},
-      // USCITE: dipendenti con data fine rapporto nella settimana scorsa (connector OR)
-      {field:'Data fine rapporto',   fieldDef:{type:'date'}, op:'between', val1:fromISO, val2:toISO, connector:'OR'},
+      // ENTRATE: Data Assunzione (con A maiuscola, nome reale del campo in Contratti)
+      {field:'Data Assunzione',    fieldDef:{type:'date'}, op:'between', val1:fromISO, val2:toISO, connector:'AND'},
+      // USCITE: Data fine rapporto (in OR: trova sia chi è entrato che chi è uscito)
+      {field:'Data fine rapporto', fieldDef:{type:'date'}, op:'between', val1:fromISO, val2:toISO, connector:'OR'},
     ];
   }
   return [];
