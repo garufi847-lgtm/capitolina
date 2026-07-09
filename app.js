@@ -64,6 +64,64 @@ const Store = {
         if(base) this.save(t);
       }
     }
+    // Riallineamento retroattivo: propaga Data fine rapporto e Data Assunzione
+    // da Contratti → Dipendenti per tutti i record dove Dipendenti li ha vuoti.
+    // Questo risolve i casi in cui il dato esiste in Contratti ma non è mai stato
+    // sincronizzato in Dipendenti (es. record creati prima dell'aggiunta di questa logica).
+    this._retroSyncDateFromContratti();
+  },
+
+  // Copia Data fine rapporto e Data Assunzione da Contratti verso Dipendenti
+  // per ogni dipendente che ha quei campi vuoti in Dipendenti.
+  // Viene eseguita al caricamento e non sovrascrive valori già presenti.
+  _retroSyncDateFromContratti(){
+    const dipRows = this.data['dipendenti']?.rows;
+    const conRows = this.data['contratti']?.rows;
+    if(!dipRows || !conRows) return;
+    const normalize = s => String(s||'').trim().replace(',','.').toUpperCase();
+
+    // Costruisce una mappa N°Socio → record contratto più recente (per Data Assunzione)
+    // e raccoglie la Data fine rapporto più recente tra tutti i contratti dello stesso socio
+    const conBySocio = {};
+    conRows.forEach(r => {
+      const socio = normalize(r['Id Dipendente (N° Socio)'] || '');
+      if(!socio) return;
+      if(!conBySocio[socio]) conBySocio[socio] = [];
+      conBySocio[socio].push(r);
+    });
+
+    let changed = false;
+    dipRows.forEach(d => {
+      const socio = normalize(d['N° Socio'] || '');
+      if(!socio) return;
+      const contracts = conBySocio[socio];
+      if(!contracts || !contracts.length) return;
+
+      // Data Assunzione: prende la più vecchia tra i contratti (prima assunzione)
+      if(!d['Data assunzione'] || !d['Data assunzione'].trim()){
+        const dates = contracts.map(c => c['Data Assunzione'] || '').filter(v => v.trim());
+        if(dates.length){
+          // ordina ISO-compatibile DD-MM-YYYY → YYYY-MM-DD per sort
+          const toISO = s => { const p=s.split(/[-\/]/); return p[0].length===4?s:`${p[2]}-${p[1]}-${p[0]}`; };
+          dates.sort((a,b) => toISO(a) > toISO(b) ? 1 : -1);
+          d['Data assunzione'] = dates[0]; // la più vecchia
+          changed = true;
+        }
+      }
+
+      // Data fine rapporto: prende la più recente tra i contratti
+      if(!d['Data fine rapporto'] || !d['Data fine rapporto'].trim()){
+        const dates = contracts.map(c => c['Data fine rapporto'] || '').filter(v => v.trim());
+        if(dates.length){
+          const toISO = s => { const p=s.split(/[-\/]/); return p[0].length===4?s:`${p[2]}-${p[1]}-${p[0]}`; };
+          dates.sort((a,b) => toISO(a) > toISO(b) ? -1 : 1);
+          d['Data fine rapporto'] = dates[0]; // la più recente
+          changed = true;
+        }
+      }
+    });
+
+    if(changed) this.save('dipendenti');
   },
 
   // Salva: sempre in localStorage (cache/fallback) e, se il NAS è configurato, anche lì (sorgente condivisa)
@@ -112,7 +170,8 @@ const Store = {
 
     // Campi condivisi da sincronizzare ovunque esistano (in forma lowercase per il match)
     const SYNC_FIELDS = ['cognome','nome','azienda','stato dipendente','mansione',
-      'data di nascita','luogo di nascita','codice fiscale','data assunzione'];
+      'data di nascita','luogo di nascita','codice fiscale','data assunzione',
+      'data fine rapporto','causa fine rapporto'];
 
     // Gruppi di campi EQUIVALENTI che rappresentano lo stesso dato ma con nomi diversi
     // in tabelle diverse (es. "Telefono Cellulare" in Dipendenti = "Recapito telefonico"
@@ -242,7 +301,7 @@ const OPT = {
   domicilio: ['Sì','No'],
   tipoDoc: ['Carta Identità','Carta Identità Europea','Patente','Passaporto','PSP'],
   statoSocio: ['ATTIVO','NON ATTIVO'],
-  statoDip: ['ATTIVO','NON IN FORZA'],
+  statoDip: ['ATTIVO','NON IN FORZA','NON ATTIVO'],
   mansioni: ['Addetto controllo accessi','Addetto manutenzione aree verdi','Addetto pulizie','Addetto pulizie esterne','Addetto Ristorazione','Autista pat. B','Cameriera ai piani','Cameriera ai piani / Addetto ristorazione','Custode','Facchino','Facchino / Muletto',"Facchino d'albergo","Facchino d'albergo / Addetto ristorazione",'Fattorino','Governante','Impiegato amministrativo','Magazziniere','Magazziniere / Muletto','Manutentore'],
   tipoPermesso: ['Asilo','Attesa occupazione','Carta di soggiorno','Lavoro autonomo','Lavoro subordinato','Motivi Familiari','Motivi di studio','Protezione Internazionale','Protezione Speciale','Protezione Sussidiaria','Protezione Temporanea','Soggiornante Lungo Periodo'],
   tipologiaCorso: ['Corso Base','Haccp','Preposto','Carrelli Elevatori / Muletti','Lavori in quota','Piattaforme aeree','Primo Soccorso','Antincendio','RLS'],
@@ -781,7 +840,7 @@ const SECTIONS = {
 // colonne mostrate in tabella
 const TABLE_META = {
   dipendenti:   {label:'Dipendenti',             cols:['N° Socio','Azienda','Cognome','Nome','Mansione','Stato Dipendente','Codice Fiscale'],   status:null},
-  contratti:    {label:'Contratti di Lavoro',    cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Livello','Scadenza Contratto','Stato Dipendente'], status:null},
+  contratti:    {label:'Contratti di Lavoro',    cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia contrattuale','Data Proroga 1','Data Proroga 2','Data Proroga 3','Data Proroga 4','Scadenza Contratto','Stato Dipendente'], status:null},
   formazione:   {label:'Formazione',             cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso','Stato Dipendente'], status:'Stato Corso'},
   sorveglianza: {label:'Sorveglianza Sanitaria', cols:['Id Dipendente (N° Socio)','Azienda','Cognome','Nome','Data visita medica','Scadenza Idoneità','Stato idoneità','Stato dipendente'], status:'Stato idoneità'},
   aziende:      {label:'Anagrafica Aziende',     cols:['Denominazione Ditta','Partita IVA','PEC','Email','Codice ATECO'], status:null},
@@ -3192,6 +3251,8 @@ const ADV_FIELDS = {
     { label:'Assistenza Sanitaria',field:'Assistenza Sanitaria integrativa',   type:'select', opts:'assistenza' },
     { label:'Data Proroga 1',      field:'Data Proroga 1',                     type:'date' },
     { label:'Data Proroga 2',      field:'Data Proroga 2',                     type:'date' },
+    { label:'Data Proroga 3',      field:'Data Proroga 3',                     type:'date' },
+    { label:'Data Proroga 4',      field:'Data Proroga 4',                     type:'date' },
     { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',           type:'text' },
   ],
   formazione: [
@@ -3216,7 +3277,7 @@ const ADV_FIELDS = {
     { label:'Nome',                field:'Nome',                               type:'text' },
     { label:'Data di Nascita',     field:'Data di nascita',                    type:'date' },
     { label:'Azienda',             field:'Azienda',                            type:'select', opts:'aziende' },
-    { label:'Stato Dipendente',    field:'Stato Dipendente',                   type:'select', opts:'statoDip' },
+    { label:'Stato Dipendente',    field:'Stato dipendente',                   type:'select', opts:'statoDip' },
     { label:'Mansione',            field:'Mansione',                           type:'select', opts:'mansioni' },
     { label:'Stato Idoneità',      field:'Stato idoneità',                     type:'select', opts:'idoneo' },
     { label:'Analisi',             field:'Analisi',                            type:'select', opts:'analisi' },
@@ -3560,8 +3621,12 @@ function evalCriterion(row, c){
     // Text/select ops
     const rv = rawVal.toLowerCase();
     const v1 = val1.toLowerCase();
-    if(op==='is')           return rv === v1;
-    if(op==='is_not')       return rv !== v1;
+    // Equivalenza: "non in forza" e "non attivo" sono lo stesso stato in tabelle diverse
+    const NON_ATTIVO_EQUIV = ['non in forza','non attivo'];
+    const rvNorm = NON_ATTIVO_EQUIV.includes(rv) ? 'non_attivo_equiv' : rv;
+    const v1Norm = NON_ATTIVO_EQUIV.includes(v1) ? 'non_attivo_equiv' : v1;
+    if(op==='is')           return rvNorm === v1Norm;
+    if(op==='is_not')       return rvNorm !== v1Norm;
     if(op==='contains')     return rv.includes(v1);
     if(op==='not_contains') return !rv.includes(v1);
     if(op==='starts_with')  return rv.startsWith(v1);
@@ -3622,7 +3687,10 @@ App.renderTable = function(t){
 
   const ths=`<th style="width:34px"><input type="checkbox" ${allPageSelected?'checked':''} onchange="App.toggleSelectAllPage('${t}',this.checked)" title="Seleziona tutti in questa pagina"/></th>`+
     `<th style="width:100px">Azioni</th>`+
-    cols.map(c=>`<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(c)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`).join('');
+    cols.map(c=>{
+      const label = c==='__proroga_max' ? 'Proroga' : c;
+      return `<th class="${this.sortCol===c?'sorted':''}" onclick="App.sortBy('${esc(c)}')">${esc(label)} <span class="sort-icon">${this.sortCol===c?(this.sortDir===1?'↑':'↓'):'↕'}</span></th>`;
+    }).join('');
   // Per Dipendenti, Stato Dipendente e Mansione vengono sincronizzati dal contratto
   // associato (per N° Socio) anche nella vista a elenco, non solo nel form di modifica.
   const normalizeNSocioList = s => String(s||'').trim().replace(',', '.').toUpperCase();
@@ -3638,6 +3706,20 @@ App.renderTable = function(t){
     const oi=all.indexOf(row);
     const isSel = this.selected.has(row._id);
     const tds=cols.map(c=>{
+      // Colonna virtuale: proroga più futura tra Data Proroga 1-4
+      if(c==='__proroga_max'){
+        const proroghe = ['Data Proroga 1','Data Proroga 2','Data Proroga 3','Data Proroga 4']
+          .map(k=>row[k]||'').filter(d=>d.trim());
+        if(!proroghe.length) return `<td style="color:var(--text3)">—</td>`;
+        // Ordina le date e prende la più futura (parseDate gestisce DD-MM-YYYY e YYYY-MM-DD)
+        const sorted = proroghe.sort((a,b)=>{
+          const pa=a.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/), pb=b.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
+          const da=pa?`${pa[3]}-${pa[2]}-${pa[1]}`:a, db=pb?`${pb[3]}-${pb[2]}-${pb[1]}`:b;
+          return da>db?1:-1;
+        });
+        const latest = sorted[sorted.length-1];
+        return `<td title="${esc(latest)}">${esc(latest)}</td>`;
+      }
       let v=row[c]??'';
       if(t==='dipendenti' && ['Stato Dipendente','Mansione','Data assunzione','Data fine rapporto'].includes(c)){
         const contratto = contrattiByNSocio[normalizeNSocioList(row['N° Socio'])];
@@ -4198,9 +4280,24 @@ App._renderQuickSearchEditor = function(){
         <select style="flex:1;min-width:120px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px" onchange="App._qsCritOpChange(${ci},this.value)">
           ${opsList.map(o=>`<option value="${o.value}" ${o.value===c.op?'selected':''}>${esc(o.label)}</option>`).join('')}
         </select>
-        ${needsVal?`<input type="${fieldDef.type==='date'?'date':'text'}" value="${esc(c.val1||'')}" placeholder="Valore"
-          style="flex:1;min-width:120px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px"
-          onchange="App._qsCritValChange(${ci},this.value)"/>`:''}
+        ${needsVal ? (() => {
+          if(fieldDef.type === 'date'){
+            return `<input type="date" value="${esc(c.val1||'')}" placeholder="Valore"
+              style="flex:1;min-width:120px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px"
+              onchange="App._qsCritValChange(${ci},this.value)"/>`;
+          } else if(fieldDef.type === 'select' && fieldDef.opts && OPT[fieldDef.opts]){
+            const optValues = OPT[fieldDef.opts];
+            return `<select style="flex:1;min-width:120px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px"
+              onchange="App._qsCritValChange(${ci},this.value)">
+              <option value="">— seleziona —</option>
+              ${optValues.map(o=>`<option value="${esc(o)}" ${o===c.val1?'selected':''}>${esc(o)}</option>`).join('')}
+            </select>`;
+          } else {
+            return `<input type="text" value="${esc(c.val1||'')}" placeholder="Valore"
+              style="flex:1;min-width:120px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px"
+              onchange="App._qsCritValChange(${ci},this.value)"/>`;
+          }
+        })() : ''}
         <button class="icon-btn danger" title="Rimuovi criterio" onclick="App._qsRemoveCrit(${ci})">✕</button>
       </div>`;
   }).join('');
@@ -4310,8 +4407,12 @@ App.runQuickSearch = function(t, id){
   let rows = allRows.filter(r => advMatchesCriteria(r, crit));
   if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
 
-  // Use only cols that exist in store
-  const cols = s.cols.filter(c => storeCols.includes(c));
+  // Use only cols that exist in store — normalizza storeCols che può essere array
+  // di stringhe o oggetti {name,...} a seconda di come il NAS ha salvato la struttura
+  const storeColNames = storeCols.map(c => typeof c === 'string' ? c : (c.name||c.field||''));
+  const cols = (s.cols && s.cols.length)
+    ? s.cols.filter(c => c !== '__proroga_max')
+    : storeColNames.filter(c => c && c !== '_id');
 
   // Sort by Cognome if available
   if(cols.includes('Cognome')) rows.sort((a,b) => (a.Cognome||'').localeCompare(b.Cognome||''));
@@ -4389,7 +4490,10 @@ App.printQuickResult = function(id, t){
   let rows = allRows.filter(r => advMatchesCriteria(r, crit));
   if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
   if(rows.includes && rows.sort) rows.sort((a,b) => (a.Cognome||'').localeCompare(b.Cognome||''));
-  const cols = s.cols.filter(c => storeCols.includes(c));
+  const storeColNames = storeCols.map(c => typeof c === 'string' ? c : (c.name||c.field||''));
+  const cols = (s.cols && s.cols.length)
+    ? s.cols.filter(c => c !== '__proroga_max')
+    : storeColNames.filter(c => c && c !== '_id');
   const oggi = new Date().toLocaleDateString('it-IT');
   const thead = cols.map(c=>`<th>${esc(c)}</th>`).join('');
   const tbody = rows.map(r=>'<tr>'+cols.map(c=>{
@@ -4431,24 +4535,38 @@ App.printQuickResult = function(id, t){
 
 // ── Export quick result to Excel ──────────────────────────────────────────────
 App.exportQuickResult = function(id, t){
-  const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
-  const s = searches.find(x => x.id === id);
-  if(!s) return;
-  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
-  const srcTable = s.table || t;
-  const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
-  const allRows = Store.getRows(srcTable);
-  const storeCols = Store.getCols(srcTable);
-  let rows = allRows.filter(r => advMatchesCriteria(r, crit));
-  if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
-  const cols = s.cols.filter(c => storeCols.includes(c));
-  const data=[cols,...rows.map(r=>cols.map(c=>r[c]||''))];
-  const ws=XLSX.utils.aoa_to_sheet(data);
-  ws['!cols']=cols.map(c=>({wch:Math.max(c.length,12)}));
-  const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,s.label.slice(0,31));
-  XLSX.writeFile(wb,s.label.replace(/[^a-zA-Z0-9]/g,'_').slice(0,50)+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
-  toast('Excel scaricato ✓');
+  try{
+    const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
+    const s = searches.find(x => x.id === id);
+    if(!s){ toast('Ricerca non trovata','error'); return; }
+    if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel);
+    const srcTable = s.table || t;
+    const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
+    const allRows = Store.getRows(srcTable);
+    const storeCols = Store.getCols(srcTable);
+    const storeColNames = storeCols.map(c => typeof c === 'string' ? c : (c.name || c.field || ''));
+    let rows = allRows.filter(r => advMatchesCriteria(r, crit));
+    if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
+    const cols = s.cols && s.cols.length
+      ? s.cols.filter(c => c !== '__proroga_max')
+      : storeColNames.filter(c => c && c !== '_id');
+    if(!cols.length){ toast('Nessuna colonna da esportare','error'); return; }
+    const data = [cols, ...rows.map(r => cols.map(c => r[c] ?? ''))];
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    ws['!cols'] = cols.map(c => ({wch: Math.max(c.length, 12)}));
+    const wb = XLSX.utils.book_new();
+    // Sanitizza nome foglio: max 31 chars, niente caratteri speciali Excel
+    const sheetName = s.label.replace(/[\/\\?\*\[\]:]/g, '-').slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    // Sanitizza nome file
+    const fileName = s.label.replace(/[^a-zA-Z0-9àèìòùÀÈÌÒÙ]/g, '_').replace(/_+/g, '_').slice(0, 50)
+      + '_' + new Date().toISOString().slice(0, 10) + '.xlsx';
+    XLSX.writeFile(wb, fileName);
+    toast('Excel scaricato ✓');
+  } catch(e){
+    console.error('exportQuickResult error:', e);
+    toast('Errore export Excel: ' + e.message, 'error');
+  }
 };
 
 // ─── STATISTICHE PER ANNO ─────────────────────────────────────────────────────
