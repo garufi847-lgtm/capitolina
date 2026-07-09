@@ -1332,6 +1332,8 @@ const App = {
     document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
     document.querySelector('[data-view="'+v+'"]')?.classList.add('active');
     document.getElementById('topbar-title').textContent=TABLE_META[v]?.label||(v==='dashboard'?'Dashboard':'Gestione Utenti');
+    const vb = document.getElementById('app-version-badge');
+    if(vb && typeof APP_VERSION !== 'undefined') vb.textContent = 'v'+APP_VERSION;
     const sw=document.getElementById('search-wrap'), ba=document.getElementById('btn-add');
     document.getElementById('search-input').value='';
     if(v==='dashboard'){
@@ -3200,7 +3202,9 @@ window.addEventListener('keydown',e=>App.handleKey(e));
 })();
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 
-// ─── RICERCA AVANZATA ─────────────────────────────────────────────────────────
+// ─── VERSIONE ────────────────────────────────────────────────────────────────
+const APP_VERSION = '2026-07-09-A';
+
 
 // Campi disponibili per tabella con tipo e opzioni
 const ADV_FIELDS = {
