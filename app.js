@@ -2566,11 +2566,19 @@ const App = {
     console.log('active:', active);
     const available = allWithVirtual.filter(c=>!active.includes(c));
     console.log('available:', available.length);
+    console.log('inizio rendering HTML...');
 
     const esc = s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const labelOf = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
 
     this._colsEditState = { t, active, available };
+    console.log('_colsEditState impostato');
+
+    const modalOverlay = document.getElementById('modal-overlay');
+    const modalTitle = document.getElementById('modal-title');
+    const modalBody = document.getElementById('modal-body');
+    const modalFooter = document.getElementById('modal-footer');
+    console.log('modal elements:', !!modalOverlay, !!modalTitle, !!modalBody, !!modalFooter);
 
     document.getElementById('modal-title').textContent = `⚙ Colonne Elenco — ${TABLE_META[t].label}`;
     document.getElementById('modal-body').innerHTML = `
