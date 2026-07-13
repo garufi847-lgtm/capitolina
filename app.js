@@ -2616,7 +2616,7 @@ const App = {
     const bCancel = document.createElement('button'); bCancel.className='btn btn-ghost'; bCancel.textContent='Annulla'; bCancel.onclick=(e)=>App.closeModal(e);
     const bSave = document.createElement('button'); bSave.className='btn btn-primary'; bSave.textContent='💾 Salva'; bSave.onclick=()=>App._colsSave(t);
     footer.appendChild(bReset); footer.appendChild(bCancel); footer.appendChild(bSave);
-    document.getElementById('modal-overlay').classList.add('active');
+    document.getElementById('modal-overlay').classList.add('open');
   },
 
   _colsBuildActive(t, container){
