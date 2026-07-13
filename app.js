@@ -2571,7 +2571,7 @@ const App = {
     const esc = s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const labelOf = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
 
-    this._colsEditState = { t, active, available };
+    App._colsEditState = { t, active, available };
     console.log('_colsEditState impostato');
 
     const modalOverlay = document.getElementById('modal-overlay');
@@ -2621,32 +2621,32 @@ const App = {
   },
 
   _colsDragSrc: null,
-  _colsDragStart(e, i){ this._colsDragSrc = i; e.dataTransfer.effectAllowed='move'; },
+  _colsDragStart(e, i){ App._colsDragSrc = i; e.dataTransfer.effectAllowed='move'; },
   _colsDrop(e, i, t){
     e.preventDefault();
-    const src = this._colsDragSrc;
+    const src = App._colsDragSrc;
     if(src===null||src===i) return;
-    const s = this._colsEditState;
+    const s = App._colsEditState;
     const moved = s.active.splice(src,1)[0];
     s.active.splice(i,0,moved);
-    this._colsRerender(t);
+    App._colsRerender(t);
   },
   _colsRemove(t, i){
-    const s = this._colsEditState;
+    const s = App._colsEditState;
     const removed = s.active.splice(i,1)[0];
     s.available.push(removed);
-    this._colsRerender(t);
+    App._colsRerender(t);
   },
   _colsAdd(t, c){
-    const s = this._colsEditState;
+    const s = App._colsEditState;
     const idx = s.available.indexOf(c);
     if(idx===-1) return;
     s.available.splice(idx,1);
     s.active.push(c);
-    this._colsRerender(t);
+    App._colsRerender(t);
   },
   _colsRerender(t){
-    const s = this._colsEditState;
+    const s = App._colsEditState;
     const esc = v=>String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const labelOf = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
     document.getElementById('cols-active').innerHTML = s.active.map((c,i)=>`
@@ -2667,12 +2667,12 @@ const App = {
     : `<p style="color:var(--text3);font-size:13px;padding:8px">Tutte le colonne sono già visibili</p>`;
   },
   async _colsSave(t){
-    const cols = this._colsEditState.active;
+    const cols = App._colsEditState.active;
     if(!cols.length){ toast('Seleziona almeno una colonna','error'); return; }
     await CustomCols.save(t, cols);
     // Se è una ricerca rapida (t inizia con qs_), riapri la ricerca
     if(t.startsWith('qs_')){
-      const [,origT,searchId] = this._colsEditState.qsMeta || [];
+      const [,origT,searchId] = App._colsEditState.qsMeta || [];
       this.closeModal();
       if(origT && searchId) this.runQuickSearch(origT, searchId);
     } else {
@@ -2685,7 +2685,7 @@ const App = {
     if(!confirm('Ripristinare le colonne di default?')) return;
     CustomCols.reset(t);
     if(t.startsWith('qs_')){
-      const [,origT,searchId] = this._colsEditState.qsMeta || [];
+      const [,origT,searchId] = App._colsEditState.qsMeta || [];
       this.closeModal();
       if(origT && searchId) this.runQuickSearch(origT, searchId);
     } else {
@@ -2705,7 +2705,7 @@ const App = {
     const current = CustomCols.get('qs_'+searchId, null) || defaultCols;
     const active = current.filter(c=>storeColNames.includes(c));
     const available = storeColNames.filter(c=>!active.includes(c));
-    this._colsEditState = { t:'qs_'+searchId, active, available, qsMeta:[null,t,searchId] };
+    App._colsEditState = { t:'qs_'+searchId, active, available, qsMeta:[null,t,searchId] };
     const esc = s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const labelOf = c=>c;
     document.getElementById('modal-title').textContent = `⚙ Colonne — ${s.icon||''} ${s.label}`;
