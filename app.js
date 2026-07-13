@@ -2566,105 +2566,120 @@ const App = {
     console.log('active:', active);
     const available = allWithVirtual.filter(c=>!active.includes(c));
     console.log('available:', available.length);
-    console.log('inizio rendering HTML...');
-
-    const esc = s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    console.log('step 1: labelOf');
     const labelOf = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
-
+    console.log('step 2: assegno _colsEditState');
     App._colsEditState = { t, active, available };
-    console.log('_colsEditState impostato');
+    console.log('step 3: chiamo _colsOpenModal, esiste?', typeof App._colsOpenModal);
+    App._colsOpenModal(t);
+    console.log('step 4: dopo _colsOpenModal');
+  },
 
-    const modalOverlay = document.getElementById('modal-overlay');
-    const modalTitle = document.getElementById('modal-title');
-    const modalBody = document.getElementById('modal-body');
-    const modalFooter = document.getElementById('modal-footer');
-    console.log('modal elements:', !!modalOverlay, !!modalTitle, !!modalBody, !!modalFooter);
-
-    document.getElementById('modal-title').textContent = `⚙ Colonne Elenco — ${TABLE_META[t].label}`;
-    document.getElementById('modal-body').innerHTML = `
-      <p style="color:var(--text3);font-size:13px;margin-bottom:12px">
-        Trascina per riordinare · Clicca ✕ per nascondere · Clicca ＋ per aggiungere
-      </p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div>
-          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--accent)">Colonne visibili</div>
-          <div id="cols-active" style="min-height:80px;border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:4px">
-            ${active.map((c,i)=>`
-              <div class="cols-editor-row" draggable="true"
-                ondragstart="App._colsDragStart(event,${i})"
-                ondragover="event.preventDefault()"
-                ondrop="App._colsDrop(event,${i},'${t}')">
-                <span style="cursor:grab;color:var(--text3);margin-right:8px">⠿</span>
-                <span style="flex:1;font-size:13px">${esc(labelOf(c))}</span>
-                <button onclick="App._colsRemove('${t}',${i})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:16px" title="Rimuovi">✕</button>
-              </div>`).join('')}
-          </div>
-        </div>
-        <div>
-          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text3)">Colonne disponibili</div>
-          <div id="cols-avail" style="min-height:80px;border:1px dashed var(--border);border-radius:8px;padding:8px;max-height:320px;overflow-y:auto">
-            ${available.length ? available.map(c=>`
-              <div onclick="App._colsAdd('${t}','${esc(c)}')"
-                style="padding:6px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px"
-                onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''">
-                <span style="color:var(--accent)">＋</span> ${esc(labelOf(c))}
-              </div>`).join('')
-            : `<p style="color:var(--text3);font-size:13px;padding:8px">Tutte le colonne sono già visibili</p>`}
-          </div>
-        </div>
-      </div>`;
-    document.getElementById('modal-footer').innerHTML = `
-      <button class="btn btn-ghost" onclick="App._colsReset('${t}')">↺ Ripristina default</button>
-      <button class="btn btn-ghost" onclick="App.closeModal(event)">Annulla</button>
-      <button class="btn btn-primary" onclick="App._colsSave('${t}')">💾 Salva</button>`;
+  _colsOpenModal(t){
+    const s = App._colsEditState;
+    const lbl = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
+    document.getElementById('modal-title').textContent = '⚙ Colonne Elenco — ' + TABLE_META[t].label;
+    const body = document.getElementById('modal-body');
+    body.innerHTML = '';
+    const intro = document.createElement('p');
+    intro.style.cssText = 'color:var(--text3);font-size:13px;margin-bottom:12px';
+    intro.textContent = 'Trascina per riordinare · Clicca ✕ per nascondere · Clicca ＋ per aggiungere';
+    body.appendChild(intro);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:16px';
+    const lDiv = document.createElement('div');
+    const lTitle = document.createElement('div');
+    lTitle.style.cssText = 'font-weight:600;font-size:13px;margin-bottom:8px;color:var(--accent)';
+    lTitle.textContent = 'Colonne visibili';
+    lDiv.appendChild(lTitle);
+    const activeEl = document.createElement('div');
+    activeEl.id = 'cols-active';
+    activeEl.style.cssText = 'min-height:80px;border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:4px';
+    App._colsBuildActive(t, activeEl);
+    lDiv.appendChild(activeEl);
+    grid.appendChild(lDiv);
+    const rDiv = document.createElement('div');
+    const rTitle = document.createElement('div');
+    rTitle.style.cssText = 'font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text3)';
+    rTitle.textContent = 'Colonne disponibili';
+    rDiv.appendChild(rTitle);
+    const availEl = document.createElement('div');
+    availEl.id = 'cols-avail';
+    availEl.style.cssText = 'min-height:80px;border:1px dashed var(--border);border-radius:8px;padding:8px;max-height:320px;overflow-y:auto';
+    App._colsBuildAvail(t, availEl);
+    rDiv.appendChild(availEl);
+    grid.appendChild(rDiv);
+    body.appendChild(grid);
+    const footer = document.getElementById('modal-footer');
+    footer.innerHTML = '';
+    const bReset = document.createElement('button'); bReset.className='btn btn-ghost'; bReset.textContent='↺ Ripristina default'; bReset.onclick=()=>App._colsReset(t);
+    const bCancel = document.createElement('button'); bCancel.className='btn btn-ghost'; bCancel.textContent='Annulla'; bCancel.onclick=(e)=>App.closeModal(e);
+    const bSave = document.createElement('button'); bSave.className='btn btn-primary'; bSave.textContent='💾 Salva'; bSave.onclick=()=>App._colsSave(t);
+    footer.appendChild(bReset); footer.appendChild(bCancel); footer.appendChild(bSave);
     document.getElementById('modal-overlay').classList.add('active');
   },
 
+  _colsBuildActive(t, container){
+    const s = App._colsEditState;
+    const lbl = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
+    container.innerHTML = '';
+    s.active.forEach((c,i)=>{
+      const row = document.createElement('div');
+      row.className='cols-editor-row'; row.draggable=true;
+      row.ondragstart=(e)=>{ App._colsDragSrc=i; e.dataTransfer.effectAllowed='move'; };
+      row.ondragover=(e)=>e.preventDefault();
+      row.ondrop=(e)=>{ e.preventDefault(); App._colsDropIdx(i,t); };
+      const handle=document.createElement('span'); handle.style.cssText='cursor:grab;color:var(--text3);margin-right:8px'; handle.textContent='⠿';
+      const label=document.createElement('span'); label.style.cssText='flex:1;font-size:13px'; label.textContent=lbl(c);
+      const btn=document.createElement('button'); btn.style.cssText='background:none;border:none;cursor:pointer;color:var(--danger);font-size:16px'; btn.title='Rimuovi'; btn.textContent='✕'; btn.onclick=()=>App._colsRemoveIdx(i,t);
+      row.appendChild(handle); row.appendChild(label); row.appendChild(btn); container.appendChild(row);
+    });
+  },
+
+  _colsBuildAvail(t, container){
+    const s = App._colsEditState;
+    const lbl = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
+    container.innerHTML = '';
+    if(!s.available.length){
+      const p=document.createElement('p'); p.style.cssText='color:var(--text3);font-size:13px;padding:8px'; p.textContent='Tutte le colonne sono già visibili'; container.appendChild(p); return;
+    }
+    s.available.forEach(c=>{
+      const row=document.createElement('div');
+      row.style.cssText='padding:6px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px';
+      row.onmouseover=()=>row.style.background='var(--hover)'; row.onmouseout=()=>row.style.background='';
+      row.onclick=()=>App._colsAddItem(c,t);
+      const plus=document.createElement('span'); plus.style.color='var(--accent)'; plus.textContent='＋';
+      const label=document.createElement('span'); label.textContent=lbl(c);
+      row.appendChild(plus); row.appendChild(label); container.appendChild(row);
+    });
+  },
+
+
   _colsDragSrc: null,
   _colsDragStart(e, i){ App._colsDragSrc = i; e.dataTransfer.effectAllowed='move'; },
-  _colsDrop(e, i, t){
-    e.preventDefault();
+  _colsDropIdx(targetIdx, t){
     const src = App._colsDragSrc;
-    if(src===null||src===i) return;
+    if(src===null||src===targetIdx) return;
     const s = App._colsEditState;
     const moved = s.active.splice(src,1)[0];
-    s.active.splice(i,0,moved);
-    App._colsRerender(t);
+    s.active.splice(targetIdx,0,moved);
+    App._colsBuildActive(t, document.getElementById('cols-active'));
   },
-  _colsRemove(t, i){
+  _colsRemoveIdx(i, t){
     const s = App._colsEditState;
     const removed = s.active.splice(i,1)[0];
     s.available.push(removed);
-    App._colsRerender(t);
+    App._colsBuildActive(t, document.getElementById('cols-active'));
+    App._colsBuildAvail(t, document.getElementById('cols-avail'));
   },
-  _colsAdd(t, c){
+  _colsAddItem(c, t){
     const s = App._colsEditState;
     const idx = s.available.indexOf(c);
     if(idx===-1) return;
     s.available.splice(idx,1);
     s.active.push(c);
-    App._colsRerender(t);
-  },
-  _colsRerender(t){
-    const s = App._colsEditState;
-    const esc = v=>String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    const labelOf = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
-    document.getElementById('cols-active').innerHTML = s.active.map((c,i)=>`
-      <div class="cols-editor-row" draggable="true"
-        ondragstart="App._colsDragStart(event,${i})"
-        ondragover="event.preventDefault()"
-        ondrop="App._colsDrop(event,${i},'${t}')">
-        <span style="cursor:grab;color:var(--text3);margin-right:8px">⠿</span>
-        <span style="flex:1;font-size:13px">${esc(labelOf(c))}</span>
-        <button onclick="App._colsRemove('${t}',${i})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:16px" title="Rimuovi">✕</button>
-      </div>`).join('');
-    document.getElementById('cols-avail').innerHTML = s.available.length ? s.available.map(c=>`
-      <div onclick="App._colsAdd('${t}','${esc(c)}')"
-        style="padding:6px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px"
-        onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''">
-        <span style="color:var(--accent)">＋</span> ${esc(labelOf(c))}
-      </div>`).join('')
-    : `<p style="color:var(--text3);font-size:13px;padding:8px">Tutte le colonne sono già visibili</p>`;
+    App._colsBuildActive(t, document.getElementById('cols-active'));
+    App._colsBuildAvail(t, document.getElementById('cols-avail'));
   },
   async _colsSave(t){
     const cols = App._colsEditState.active;
