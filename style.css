@@ -1093,5 +1093,6 @@ label.field-label .req { color: var(--danger); margin-left: 2px; }
 /* Selezione multipla righe tabella */
 .row-selected { background: #eff6ff !important; }
 .row-selected:hover { background: #dbeafe !important; }
-.bulk-edit-bar { animation: fadeIn .15s ease; }
+.cols-editor-row { display:flex; align-items:center; padding:6px 8px; border-radius:6px; background:var(--surface); border:1px solid var(--border); cursor:grab; }
+.cols-editor-row:hover { background:var(--hover); } animation: fadeIn .15s ease; }
 @keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }

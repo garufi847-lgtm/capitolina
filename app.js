@@ -171,7 +171,7 @@ const Store = {
     // Campi condivisi da sincronizzare ovunque esistano (in forma lowercase per il match)
     const SYNC_FIELDS = ['cognome','nome','azienda','stato dipendente','mansione',
       'data di nascita','luogo di nascita','codice fiscale','data assunzione',
-      'data fine rapporto','causa fine rapporto'];
+      'data fine rapporto','causa fine rapporto','telefono cellulare'];
 
     // Gruppi di campi EQUIVALENTI che rappresentano lo stesso dato ma con nomi diversi
     // in tabelle diverse (es. "Telefono Cellulare" in Dipendenti = "Recapito telefonico"
@@ -917,6 +917,58 @@ const CustomLayout = {
 
 // ─── ETICHETTE PERSONALIZZATE PER LE RICERCHE RAPIDE (solo admin) ──────────────
 // Permette di rinominare il titolo mostrato sulle card delle ricerche rapide,
+// ─── COLONNE PERSONALIZZATE ELENCO (solo admin) ───────────────────────────────
+// Permette di scegliere quali colonne mostrare nella vista a elenco e in che ordine,
+// sia per le tabelle principali che per i risultati delle ricerche rapide.
+// Chiave NAS: colsconfig_<tabella>.json
+const CustomCols = {
+  _cache: {}, // { [table]: [...colNames] }
+
+  _key(t){ return 'gest_colscfg_'+t; },
+
+  async load(t){
+    // Prima prova NAS, poi localStorage
+    const base = Store._nasBase();
+    if(base){
+      try{
+        const r = await fetch(`${base}/api/colsconfig_${t}`, { cache:'no-store' });
+        if(r.ok){
+          const d = await r.json();
+          if(Array.isArray(d?.cols) && d.cols.length){
+            this._cache[t] = d.cols;
+            localStorage.setItem(this._key(t), JSON.stringify(d.cols));
+            return;
+          }
+        }
+      }catch(e){}
+    }
+    const local = localStorage.getItem(this._key(t));
+    if(local){ try{ const p=JSON.parse(local); if(Array.isArray(p) && p.length) this._cache[t]=p; }catch(e){} }
+  },
+
+  async save(t, cols){
+    this._cache[t] = cols;
+    localStorage.setItem(this._key(t), JSON.stringify(cols));
+    const base = Store._nasBase();
+    if(base){
+      try{ await fetch(`${base}/api/colsconfig_${t}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cols}) }); }catch(e){}
+    }
+  },
+
+  get(t, defaultCols){
+    const cached = this._cache[t];
+    if(!cached || !cached.length) return defaultCols;
+    return cached;
+  },
+
+  reset(t){
+    delete this._cache[t];
+    localStorage.removeItem(this._key(t));
+    const base = Store._nasBase();
+    if(base){ try{ fetch(`${base}/api/colsconfig_${t}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cols:[]}) }); }catch(e){} }
+  },
+};
+
 // senza modificare l'id interno o la logica del filtro. Persistita allo stesso modo
 // del layout: localStorage + sincronizzazione NAS se configurato.
 const CustomLabels = {
@@ -1088,7 +1140,13 @@ const SKIP = new Set(['_id','Riepilogo Dipendente','Riepilogo Dati contrattuali'
 
 function dispCols(t){
   const m=TABLE_META[t], all=Store.getCols(t);
-  const p=m.cols.filter(c=>all.includes(c));
+  const defaultCols = m.cols.filter(c=>all.includes(c)||c==='__proroga_max');
+  const custom = CustomCols.get(t, null);
+  if(custom && custom.length){
+    // Usa le colonne personalizzate, mantenendo solo quelle che esistono ancora
+    return custom.filter(c=>all.includes(c)||c==='__proroga_max');
+  }
+  const p = defaultCols;
   return p.length?p:all.filter(c=>!SKIP.has(c)).slice(0,7);
 }
 
@@ -2489,6 +2547,182 @@ const App = {
     }
   },
 
+  // ── Editor Colonne Elenco (solo admin) ─────────────────────────────────────
+  openColsEditor(t){
+    console.log('openColsEditor chiamato per:', t);
+    if(!Auth.isAdmin()){ toast('Funzione riservata agli amministratori','error'); return; }
+    const rawCols = Store.getCols(t);
+    console.log('rawCols:', rawCols?.length, typeof rawCols?.[0]);
+    const all = rawCols.map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(c=>c&&!SKIP.has(c)&&c!=='_id');
+    console.log('all cols:', all.length);
+    const virtualCols = t==='contratti' ? ['__proroga_max'] : [];
+    const allWithVirtual = [...all, ...virtualCols];
+    console.log('allWithVirtual:', allWithVirtual.length);
+    const defaultCols = TABLE_META[t].cols.filter(c=>allWithVirtual.includes(c)||c==='__proroga_max');
+    console.log('defaultCols:', defaultCols);
+    const current = CustomCols.get(t, null) || defaultCols;
+    console.log('current:', current);
+    const active = current.filter(c=>allWithVirtual.includes(c));
+    console.log('active:', active);
+    const available = allWithVirtual.filter(c=>!active.includes(c));
+    console.log('available:', available.length);
+
+    const esc = s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const labelOf = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
+
+    this._colsEditState = { t, active, available };
+
+    document.getElementById('modal-title').textContent = `⚙ Colonne Elenco — ${TABLE_META[t].label}`;
+    document.getElementById('modal-body').innerHTML = `
+      <p style="color:var(--text3);font-size:13px;margin-bottom:12px">
+        Trascina per riordinare · Clicca ✕ per nascondere · Clicca ＋ per aggiungere
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--accent)">Colonne visibili</div>
+          <div id="cols-active" style="min-height:80px;border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:4px">
+            ${active.map((c,i)=>`
+              <div class="cols-editor-row" draggable="true"
+                ondragstart="App._colsDragStart(event,${i})"
+                ondragover="event.preventDefault()"
+                ondrop="App._colsDrop(event,${i},'${t}')">
+                <span style="cursor:grab;color:var(--text3);margin-right:8px">⠿</span>
+                <span style="flex:1;font-size:13px">${esc(labelOf(c))}</span>
+                <button onclick="App._colsRemove('${t}',${i})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:16px" title="Rimuovi">✕</button>
+              </div>`).join('')}
+          </div>
+        </div>
+        <div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text3)">Colonne disponibili</div>
+          <div id="cols-avail" style="min-height:80px;border:1px dashed var(--border);border-radius:8px;padding:8px;max-height:320px;overflow-y:auto">
+            ${available.length ? available.map(c=>`
+              <div onclick="App._colsAdd('${t}','${esc(c)}')"
+                style="padding:6px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px"
+                onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''">
+                <span style="color:var(--accent)">＋</span> ${esc(labelOf(c))}
+              </div>`).join('')
+            : `<p style="color:var(--text3);font-size:13px;padding:8px">Tutte le colonne sono già visibili</p>`}
+          </div>
+        </div>
+      </div>`;
+    document.getElementById('modal-footer').innerHTML = `
+      <button class="btn btn-ghost" onclick="App._colsReset('${t}')">↺ Ripristina default</button>
+      <button class="btn btn-ghost" onclick="App.closeModal(event)">Annulla</button>
+      <button class="btn btn-primary" onclick="App._colsSave('${t}')">💾 Salva</button>`;
+    document.getElementById('modal-overlay').classList.add('active');
+  },
+
+  _colsDragSrc: null,
+  _colsDragStart(e, i){ this._colsDragSrc = i; e.dataTransfer.effectAllowed='move'; },
+  _colsDrop(e, i, t){
+    e.preventDefault();
+    const src = this._colsDragSrc;
+    if(src===null||src===i) return;
+    const s = this._colsEditState;
+    const moved = s.active.splice(src,1)[0];
+    s.active.splice(i,0,moved);
+    this._colsRerender(t);
+  },
+  _colsRemove(t, i){
+    const s = this._colsEditState;
+    const removed = s.active.splice(i,1)[0];
+    s.available.push(removed);
+    this._colsRerender(t);
+  },
+  _colsAdd(t, c){
+    const s = this._colsEditState;
+    const idx = s.available.indexOf(c);
+    if(idx===-1) return;
+    s.available.splice(idx,1);
+    s.active.push(c);
+    this._colsRerender(t);
+  },
+  _colsRerender(t){
+    const s = this._colsEditState;
+    const esc = v=>String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const labelOf = c => c==='__proroga_max' ? 'Proroga (data più futura)' : c;
+    document.getElementById('cols-active').innerHTML = s.active.map((c,i)=>`
+      <div class="cols-editor-row" draggable="true"
+        ondragstart="App._colsDragStart(event,${i})"
+        ondragover="event.preventDefault()"
+        ondrop="App._colsDrop(event,${i},'${t}')">
+        <span style="cursor:grab;color:var(--text3);margin-right:8px">⠿</span>
+        <span style="flex:1;font-size:13px">${esc(labelOf(c))}</span>
+        <button onclick="App._colsRemove('${t}',${i})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:16px" title="Rimuovi">✕</button>
+      </div>`).join('');
+    document.getElementById('cols-avail').innerHTML = s.available.length ? s.available.map(c=>`
+      <div onclick="App._colsAdd('${t}','${esc(c)}')"
+        style="padding:6px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px"
+        onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''">
+        <span style="color:var(--accent)">＋</span> ${esc(labelOf(c))}
+      </div>`).join('')
+    : `<p style="color:var(--text3);font-size:13px;padding:8px">Tutte le colonne sono già visibili</p>`;
+  },
+  async _colsSave(t){
+    const cols = this._colsEditState.active;
+    if(!cols.length){ toast('Seleziona almeno una colonna','error'); return; }
+    await CustomCols.save(t, cols);
+    // Se è una ricerca rapida (t inizia con qs_), riapri la ricerca
+    if(t.startsWith('qs_')){
+      const [,origT,searchId] = this._colsEditState.qsMeta || [];
+      this.closeModal();
+      if(origT && searchId) this.runQuickSearch(origT, searchId);
+    } else {
+      this.closeModal();
+      this.renderTable(t);
+    }
+    toast('Colonne aggiornate ✓');
+  },
+  async _colsReset(t){
+    if(!confirm('Ripristinare le colonne di default?')) return;
+    CustomCols.reset(t);
+    if(t.startsWith('qs_')){
+      const [,origT,searchId] = this._colsEditState.qsMeta || [];
+      this.closeModal();
+      if(origT && searchId) this.runQuickSearch(origT, searchId);
+    } else {
+      this.closeModal();
+      this.renderTable(t);
+    }
+    toast('Colonne ripristinate');
+  },
+
+  openColsEditorQs(t, searchId, srcTable){
+    const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t]||[]);
+    const s = searches.find(x=>x.id===searchId);
+    if(!s) return;
+    const storeCols = Store.getCols(srcTable).filter(c=>!SKIP.has(c)&&c!=='_id');
+    const storeColNames = storeCols.map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(Boolean);
+    const defaultCols = (s.cols&&s.cols.length) ? s.cols.filter(c=>storeColNames.includes(c)) : storeColNames.slice(0,8);
+    const current = CustomCols.get('qs_'+searchId, null) || defaultCols;
+    const active = current.filter(c=>storeColNames.includes(c));
+    const available = storeColNames.filter(c=>!active.includes(c));
+    this._colsEditState = { t:'qs_'+searchId, active, available, qsMeta:[null,t,searchId] };
+    const esc = s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const labelOf = c=>c;
+    document.getElementById('modal-title').textContent = `⚙ Colonne — ${s.icon||''} ${s.label}`;
+    document.getElementById('modal-body').innerHTML = `
+      <p style="color:var(--text3);font-size:13px;margin-bottom:12px">Trascina per riordinare · Clicca ✕ per nascondere · Clicca ＋ per aggiungere</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--accent)">Colonne visibili</div>
+          <div id="cols-active" style="min-height:80px;border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:4px">
+            ${active.map((c,i)=>`<div class="cols-editor-row" draggable="true" ondragstart="App._colsDragStart(event,${i})" ondragover="event.preventDefault()" ondrop="App._colsDrop(event,${i},'qs_${searchId}')"><span style="cursor:grab;color:var(--text3);margin-right:8px">⠿</span><span style="flex:1;font-size:13px">${esc(labelOf(c))}</span><button onclick="App._colsRemove('qs_${searchId}',${i})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:16px">✕</button></div>`).join('')}
+          </div>
+        </div>
+        <div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text3)">Colonne disponibili</div>
+          <div id="cols-avail" style="min-height:80px;border:1px dashed var(--border);border-radius:8px;padding:8px;max-height:320px;overflow-y:auto">
+            ${available.length ? available.map(c=>`<div onclick="App._colsAdd('qs_${searchId}','${esc(c)}')" style="padding:6px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px" onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''"><span style="color:var(--accent)">＋</span> ${esc(labelOf(c))}</div>`).join('') : '<p style="color:var(--text3);font-size:13px;padding:8px">Tutte le colonne sono già visibili</p>'}
+          </div>
+        </div>
+      </div>`;
+    document.getElementById('modal-footer').innerHTML = `
+      <button class="btn btn-ghost" onclick="App._colsReset('qs_${searchId}')">↺ Ripristina default</button>
+      <button class="btn btn-ghost" onclick="App.runQuickSearch('${t}','${searchId}')">Annulla</button>
+      <button class="btn btn-primary" onclick="App._colsSave('qs_${searchId}')">💾 Salva</button>`;
+  },
+
   // ── Editor Layout Personalizzato (solo admin) ─────────────────────────────────
   _layoutEditState: null, // {table, sections: [{t, c:[...]}]}
 
@@ -3193,12 +3427,64 @@ window.addEventListener('keydown',e=>App.handleKey(e));
 (async()=>{
   try{ await Store.load(); }catch(e){ console.error('Store error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','aziende'].map(t=>CustomLayout.load(t))); }catch(e){ console.warn('CustomLayout boot load error:',e); }
+  try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','aziende'].map(t=>CustomCols.load(t))); }catch(e){ console.warn('CustomCols boot load error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','dashboard'].map(t=>CustomLabels.load(t))); }catch(e){ console.warn('CustomLabels boot load error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza'].map(t=>CustomQuickSearches.load(t))); }catch(e){ console.warn('CustomQuickSearches boot load error:',e); }
   document.getElementById('loading').classList.add('hidden');
   const _sess=Auth.current();
   if(_sess){ document.getElementById('login-screen').style.display='none'; App.initApp(_sess); }
   else      { document.getElementById('login-screen').style.display='flex'; }
+
+  // ── Sincronizzazione automatica tra PC ───────────────────────────────────
+  // Ogni 30 secondi controlla se il NAS ha dati più recenti e li ricarica
+  // silenziosamente, aggiornando la tabella visibile se non è aperto un form.
+  const POLL_INTERVAL_MS = 30000;
+  const TABLES = ['dipendenti','contratti','formazione','sorveglianza','aziende'];
+
+  async function pollForUpdates(){
+    const base = Store._nasBase();
+    if(!base) return; // Solo se NAS configurato
+    if(document.getElementById('modal-overlay')?.classList.contains('active')) return; // Non aggiornare se c'è un form aperto
+
+    let changed = false;
+    for(const t of TABLES){
+      try{
+        const r = await fetch(`${base}/api/${t}`, { cache:'no-store' });
+        if(!r.ok) continue;
+        const remote = await r.json();
+        if(!remote?.rows?.length) continue;
+        // Confronto veloce: numero di righe e ultima riga
+        const local = Store.data[t];
+        const remoteCount = remote.rows.length;
+        const localCount  = local?.rows?.length ?? -1;
+        const remoteLastId = remote.rows[remoteCount-1]?._id ?? '';
+        const localLastId  = local?.rows?.[localCount-1]?._id ?? '';
+        if(remoteCount !== localCount || remoteLastId !== localLastId){
+          Store.data[t] = remote;
+          localStorage.setItem('gest_data_'+t, JSON.stringify(remote));
+          changed = true;
+        }
+      }catch(e){ /* NAS temporaneamente non raggiungibile, riprova al prossimo ciclo */ }
+    }
+
+    if(changed && Auth.current()){
+      // Aggiorna la tabella visibile senza ricaricare la pagina
+      const currentView = App.currentView;
+      if(currentView && TABLE_META[currentView]){
+        App.renderTable(currentView);
+      }
+      // Piccolo indicatore visivo discreto
+      const badge = document.getElementById('app-version-badge');
+      if(badge){
+        const orig = badge.textContent;
+        badge.textContent = '↻ aggiornato';
+        badge.style.color = 'var(--accent)';
+        setTimeout(()=>{ badge.textContent = orig; badge.style.color = ''; }, 2000);
+      }
+    }
+  }
+
+  setInterval(pollForUpdates, POLL_INTERVAL_MS);
 })();
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 
@@ -3769,6 +4055,7 @@ App.renderTable = function(t){
         ${Auth.can('import')?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>`:''}
         ${Auth.can('print')?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.printTable('${t}')">🖨 Stampa</button>`:''}
         ${Auth.can('clear_table')?`<button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.clearTable('${t}')">🗑 Svuota</button>`:''}
+        ${Auth.isAdmin()&&TABLE_META[t]?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.openColsEditor('${t}')" title="Scegli quali colonne mostrare nell'elenco">⚙ Colonne</button>`:''}
         ${Auth.isAdmin()?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.openLayoutEditor('${t}')" title="Personalizza l'ordine e la posizione dei campi (solo admin)">🧩 Personalizza Layout</button>`:''}
       </div>
       ${bulkBar}
@@ -4414,9 +4701,14 @@ App.runQuickSearch = function(t, id){
   // Use only cols that exist in store — normalizza storeCols che può essere array
   // di stringhe o oggetti {name,...} a seconda di come il NAS ha salvato la struttura
   const storeColNames = storeCols.map(c => typeof c === 'string' ? c : (c.name||c.field||''));
-  const cols = (s.cols && s.cols.length)
+  const defaultCols = (s.cols && s.cols.length)
     ? s.cols.filter(c => c !== '__proroga_max')
     : storeColNames.filter(c => c && c !== '_id');
+  // Usa colonne personalizzate se presenti (chiave: qs_<id>)
+  const customQsCols = CustomCols.get('qs_'+id, null);
+  const cols = (customQsCols && customQsCols.length)
+    ? customQsCols.filter(c => storeColNames.includes(c) || c === '__proroga_max')
+    : defaultCols;
 
   // Sort by Cognome if available
   if(cols.includes('Cognome')) rows.sort((a,b) => (a.Cognome||'').localeCompare(b.Cognome||''));
@@ -4459,6 +4751,7 @@ App.runQuickSearch = function(t, id){
   document.getElementById('modal-body').innerHTML = html;
   document.getElementById('modal-footer').innerHTML = `
     <button class="btn btn-ghost" onclick="App.openQuickSearches('${t}')">← Torna alle ricerche</button>
+    ${Auth.isAdmin()?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.openColsEditorQs('${t}','${id}','${srcTable}')">⚙ Colonne</button>`:''}
     <button class="btn btn-ghost" style="font-size:13px" onclick="App.printQuickResult('${s.id}','${t}')">🖨 Stampa</button>
     <button class="btn btn-ghost" style="font-size:13px" onclick="App.exportQuickResult('${s.id}','${t}')">↓ Excel</button>
     <button class="btn btn-primary" onclick="App.applyQuickFilter('${t}','${s.id}')">Mostra in tabella</button>`;
