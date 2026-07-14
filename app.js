@@ -17,6 +17,7 @@ const Auth={
   isAdmin(){const u=this.current();return u&&u.role==='admin';},
   can(perm){const u=this.current();if(!u)return false;if(u.role==='admin')return true;return(u.permissions||ROLE_DEFAULTS[u.role]||[]).includes(perm);},
   canEdit(){return this.can('edit')||this.can('add');},
+  hiddenCompanies(){const u=this.current();if(!u||u.role==='admin')return[];return u.hiddenCompanies||[];},
 };
 
 // ─── STORE ────────────────────────────────────────────────────────────────────
@@ -39,6 +40,17 @@ const Store = {
             // Se columns è vuoto (tabella non ancora inizializzata sul server),
             // NON sovrascrivere: meglio usare i dati locali/embedded e poi sincronizzarli.
             if(remote && Array.isArray(remote.rows) && Array.isArray(remote.columns) && remote.columns.length>0){
+              // Aggiunge colonne nuove presenti in data_embedded ma non ancora nel NAS
+              // (es. campi aggiunti dopo l'ultimo import)
+              const embeddedCols = EMBEDDED_DATA[t]?.columns || [];
+              const remoteCols = new Set(remote.columns);
+              const newCols = embeddedCols.filter(c=>!remoteCols.has(c));
+              if(newCols.length){
+                remote.columns = [...remote.columns, ...newCols];
+                // Aggiunge il campo vuoto a ogni riga esistente
+                remote.rows.forEach(row=>{ newCols.forEach(c=>{ if(!(c in row)) row[c]=''; }); });
+                console.log(`Store.load: aggiunte ${newCols.length} colonne nuove a ${t}:`, newCols);
+              }
               this.data[t] = remote;
               localStorage.setItem('gest_data_'+t, JSON.stringify(remote)); // cache locale di backup
               loadedFromNas = true;
@@ -306,6 +318,7 @@ const OPT = {
   tipoPermesso: ['Asilo','Attesa occupazione','Carta di soggiorno','Lavoro autonomo','Lavoro subordinato','Motivi Familiari','Motivi di studio','Protezione Internazionale','Protezione Speciale','Protezione Sussidiaria','Protezione Temporanea','Soggiornante Lungo Periodo'],
   tipologiaCorso: ['Corso Base','Haccp','Preposto','Carrelli Elevatori / Muletti','Lavori in quota','Piattaforme aeree','Primo Soccorso','Antincendio','RLS'],
   statoCoro: ['Completato','Da completare'],
+  statoAttestato: ['Ricevuto','Non ricevuto'],
   idoneo: ['Idoneo','Idoneo con prescrizioni','In attesa visita','In attesa idoneità'],
   analisi: ['Sì','No'],
   labAnalisi: ['CERBA HEALTH CARE - Albano','CERBA HEALTH CARE - Appia (Roma)','CERBA HEALTH CARE - Balduina (Roma)','CERBA HEALTH CARE - Bologna (Roma)','CERBA HEALTH CARE - Casetta Mattei (Roma)','CERBA HEALTH CARE - Cesano','CERBA HEALTH CARE - Cipro (Roma)','CERBA HEALTH CARE - Fiano Romano','CERBA HEALTH CARE - Formello','CERBA HEALTH CARE - Graf (Roma)','CERBA HEALTH CARE - Guidonia','CERBA HEALTH CARE - Ladispoli','CERBA HEALTH CARE - Mentana','CERBA HEALTH CARE - Monterotondo','CERBA HEALTH CARE - Spinaceto (Roma)','CERBA HEALTH CARE - Tiburtina (Roma)','Privato'],
@@ -343,6 +356,7 @@ const FIELDS = {
   'Tipologia Corso':                {type:'select', opts:'tipologiaCorso'},
   'Tipo formazione':                {type:'select', opts:'tipologiaCorso'},
   'Stato Corso':                    {type:'radio',  opts:'statoCoro'},
+  'Stato Attestato':                {type:'radio',  opts:'statoAttestato'},
   'Data Corso':                     {type:'date'},
   'Scadenza Corso':                 {type:'date'},
   'Data':                           {type:'date'},
@@ -825,7 +839,7 @@ const SECTIONS = {
   ],
   formazione: [
     {t:'👤 Dipendente',   c:['Cognome e Nome','Azienda','Stato Dipendente','Mansione','Data assunzione','Appalto / sede di lavoro']},
-    {t:'🎓 Corso',        c:['Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso','Ore','Docente','Note']},
+    {t:'🎓 Corso',        c:['Tipologia Corso','Data Corso','Scadenza Corso','Stato Corso','Stato Attestato','Ore','Docente','Note']},
   ],
   sorveglianza: [
     {t:'👤 Dipendente',   c:['Cognome e Nome','Azienda','Stato dipendente','Mansione','Appalto / sede di lavoro','Data assunzione']},
@@ -1501,6 +1515,14 @@ const App = {
       });
     }
     if(this.sortCol){const sc=this.sortCol,sd=this.sortDir;rows=[...rows].sort((a,b)=>{const va=String(a[sc]||'').toLowerCase(),vb=String(b[sc]||'').toLowerCase();return va<vb?-sd:va>vb?sd:0;});}
+    // Filtra le società nascoste per l'utente corrente
+    const hiddenCos = Auth.hiddenCompanies();
+    if(hiddenCos.length){
+      rows = rows.filter(r=>{
+        const az = String(r['Azienda']||r['azienda']||'').toLowerCase();
+        return !hiddenCos.some(h=>az.includes(h.toLowerCase()));
+      });
+    }
     this.filtered=rows;
     const tot=rows.length, tp=Math.max(1,Math.ceil(tot/this.pageSize));
     if(this.page>tp)this.page=tp;
@@ -2019,10 +2041,16 @@ const App = {
   _openUserForm(u,idx){
     document.getElementById('modal-title').textContent=u?'Modifica Utente':'Nuovo Utente';
     const curPerms=u?.permissions||ROLE_DEFAULTS[u?.role||'viewer']||[];
+    const curHidden=u?.hiddenCompanies||[];
     const permsHtml=Object.entries(ALL_PERMISSIONS).map(([key,def])=>
       '<label class="perm-item">'+
       '<input type="checkbox" name="perm_chk" value="'+key+'" '+(curPerms.includes(key)?'checked':'')+'/> '+
       '<span class="perm-label"><strong>'+esc(def.label)+'</strong> — <small>'+esc(def.desc)+'</small></span></label>'
+    ).join('');
+    const companiesHtml = COMPANIES.map(({value,short})=>
+      '<label class="perm-item">'+
+      '<input type="checkbox" name="hidden_co" value="'+esc(short)+'" '+(curHidden.includes(short)?'checked':'')+'/> '+
+      '<span class="perm-label"><strong>'+esc(short)+'</strong> — <small>'+esc(value)+'</small></span></label>'
     ).join('');
     document.getElementById('modal-body').innerHTML=
       '<div class="form-grid" style="padding:0;margin-bottom:16px">'+
@@ -2039,7 +2067,11 @@ const App = {
       '<div class="form-section-title" style="display:flex;justify-content:space-between;align-items:center">'+
       '🔐 Permessi personalizzati'+
       '<button type="button" class="btn btn-ghost" style="font-size:11px;padding:3px 10px" onclick="App.resetPermsToRole()">↺ Ripristina dal ruolo</button></div>'+
-      '<div class="perm-grid" id="perm-grid">'+permsHtml+'</div></div>';
+      '<div class="perm-grid" id="perm-grid">'+permsHtml+'</div></div>'+
+      '<div class="form-section" style="margin-top:16px">'+
+      '<div class="form-section-title">🏢 Società nascoste</div>'+
+      '<p style="font-size:12px;color:var(--text3);margin-bottom:8px">Le società selezionate non saranno visibili a questo utente in nessuna tabella.</p>'+
+      '<div class="perm-grid" id="hidden-co-grid">'+companiesHtml+'</div></div>';
     document.getElementById('modal-footer').innerHTML=
       '<button class="btn btn-ghost" onclick="App.closeModal()">Annulla</button>'+
       '<button class="btn btn-primary" id="btn-save-user">Salva</button>';
@@ -2050,9 +2082,10 @@ const App = {
       const ro=document.getElementById('u_ro').value;
       if(!un||!no){toast('Compila tutti i campi','error');return;}
       const perms=this.getSelectedPerms();
+      const hiddenCo=[...document.querySelectorAll('#hidden-co-grid input[type=checkbox]:checked')].map(cb=>cb.value);
       const users=Auth.getUsers();
-      if(idx===null){if(!pw){toast('Inserisci una password','error');return;}users.push({username:un,nome:no,password:pw,role:ro,permissions:perms});}
-      else{users[idx]={username:un,nome:no,role:ro,password:pw||users[idx].password,permissions:perms};}
+      if(idx===null){if(!pw){toast('Inserisci una password','error');return;}users.push({username:un,nome:no,password:pw,role:ro,permissions:perms,hiddenCompanies:hiddenCo});}
+      else{users[idx]={username:un,nome:no,role:ro,password:pw||users[idx].password,permissions:perms,hiddenCompanies:hiddenCo};}
       Auth.saveUsers(users);toast('Utente salvato');this.closeModal();this.renderUsers();
     });
     this.openModal();
@@ -2549,6 +2582,9 @@ const App = {
 
   // ── Editor Colonne Elenco (solo admin) ─────────────────────────────────────
   openColsEditor(t){
+    if(App._colsEditorOpening) return;
+    App._colsEditorOpening = true;
+    setTimeout(()=>{ App._colsEditorOpening = false; }, 500);
     console.log('openColsEditor chiamato per:', t);
     if(!Auth.isAdmin()){ toast('Funzione riservata agli amministratori','error'); return; }
     const rawCols = Store.getCols(t);
@@ -2714,36 +2750,109 @@ const App = {
     const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t]||[]);
     const s = searches.find(x=>x.id===searchId);
     if(!s) return;
-    const storeCols = Store.getCols(srcTable).filter(c=>!SKIP.has(c)&&c!=='_id');
-    const storeColNames = storeCols.map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(Boolean);
-    const defaultCols = (s.cols&&s.cols.length) ? s.cols.filter(c=>storeColNames.includes(c)) : storeColNames.slice(0,8);
+
+    // Raccoglie colonne da TUTTE le tabelle dati, con prefisso per distinguerle
+    // Le colonne della tabella sorgente non hanno prefisso; le altre hanno "[Tabella] "
+    const ALL_TABLES = ['dipendenti','contratti','formazione','sorveglianza'];
+    const allColsMap = {}; // colName → true (deduplicato)
+    const allColsList = []; // [{col, fromTable, label}]
+    const seen = new Set();
+
+    // Prima aggiungi le colonne della tabella sorgente (senza prefisso)
+    const srcRaw = Store.getCols(srcTable);
+    const srcCols = srcRaw.map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(c=>c&&!SKIP.has(c)&&c!=='_id');
+    srcCols.forEach(c=>{ if(!seen.has(c)){ seen.add(c); allColsList.push({col:c, fromTable:srcTable, label:c}); } });
+
+    // Poi aggiungi le colonne delle altre tabelle con prefisso
+    ALL_TABLES.filter(tb=>tb!==srcTable).forEach(tb=>{
+      const raw = Store.getCols(tb);
+      const cols = raw.map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(c=>c&&!SKIP.has(c)&&c!=='_id');
+      const tableLabel = TABLE_META[tb]?.label || tb;
+      cols.forEach(c=>{
+        // Evita duplicati esatti (es. Cognome, Nome, Azienda già presenti)
+        if(!seen.has(c)){
+          seen.add(c);
+          allColsList.push({col:c, fromTable:tb, label:`[${tableLabel}] ${c}`});
+        }
+      });
+    });
+
+    const allColNames = allColsList.map(x=>x.col);
+    const defaultCols = (s.cols&&s.cols.length) ? s.cols.filter(c=>allColNames.includes(c)) : srcCols.slice(0,8);
     const current = CustomCols.get('qs_'+searchId, null) || defaultCols;
-    const active = current.filter(c=>storeColNames.includes(c));
-    const available = storeColNames.filter(c=>!active.includes(c));
-    App._colsEditState = { t:'qs_'+searchId, active, available, qsMeta:[null,t,searchId] };
-    const esc = s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    const labelOf = c=>c;
+    const active = current.filter(c=>allColNames.includes(c));
+    const availableItems = allColsList.filter(x=>!active.includes(x.col));
+
+    // Salva la mappa col→fromTable per usarla durante il rendering dei risultati
+    CustomCols._qsColTableMap = CustomCols._qsColTableMap || {};
+    CustomCols._qsColTableMap[searchId] = Object.fromEntries(allColsList.map(x=>[x.col,x.fromTable]));
+
+    App._colsEditState = { t:'qs_'+searchId, active, available: availableItems.map(x=>x.col), availableItems, qsMeta:[null,t,searchId] };
+
+    const esc = v=>String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
     document.getElementById('modal-title').textContent = `⚙ Colonne — ${s.icon||''} ${s.label}`;
-    document.getElementById('modal-body').innerHTML = `
-      <p style="color:var(--text3);font-size:13px;margin-bottom:12px">Trascina per riordinare · Clicca ✕ per nascondere · Clicca ＋ per aggiungere</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div>
-          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--accent)">Colonne visibili</div>
-          <div id="cols-active" style="min-height:80px;border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:4px">
-            ${active.map((c,i)=>`<div class="cols-editor-row" draggable="true" ondragstart="App._colsDragStart(event,${i})" ondragover="event.preventDefault()" ondrop="App._colsDrop(event,${i},'qs_${searchId}')"><span style="cursor:grab;color:var(--text3);margin-right:8px">⠿</span><span style="flex:1;font-size:13px">${esc(labelOf(c))}</span><button onclick="App._colsRemove('qs_${searchId}',${i})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:16px">✕</button></div>`).join('')}
-          </div>
-        </div>
-        <div>
-          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text3)">Colonne disponibili</div>
-          <div id="cols-avail" style="min-height:80px;border:1px dashed var(--border);border-radius:8px;padding:8px;max-height:320px;overflow-y:auto">
-            ${available.length ? available.map(c=>`<div onclick="App._colsAdd('qs_${searchId}','${esc(c)}')" style="padding:6px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px" onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''"><span style="color:var(--accent)">＋</span> ${esc(labelOf(c))}</div>`).join('') : '<p style="color:var(--text3);font-size:13px;padding:8px">Tutte le colonne sono già visibili</p>'}
-          </div>
-        </div>
-      </div>`;
-    document.getElementById('modal-footer').innerHTML = `
-      <button class="btn btn-ghost" onclick="App._colsReset('qs_${searchId}')">↺ Ripristina default</button>
-      <button class="btn btn-ghost" onclick="App.runQuickSearch('${t}','${searchId}')">Annulla</button>
-      <button class="btn btn-primary" onclick="App._colsSave('qs_${searchId}')">💾 Salva</button>`;
+
+    const body = document.getElementById('modal-body');
+    body.innerHTML = '';
+    const intro = document.createElement('p');
+    intro.style.cssText = 'color:var(--text3);font-size:13px;margin-bottom:12px';
+    intro.textContent = 'Trascina per riordinare · Clicca ✕ per nascondere · Clicca ＋ per aggiungere';
+    body.appendChild(intro);
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:16px';
+
+    const lDiv = document.createElement('div');
+    const lTitle = document.createElement('div');
+    lTitle.style.cssText = 'font-weight:600;font-size:13px;margin-bottom:8px;color:var(--accent)';
+    lTitle.textContent = 'Colonne visibili';
+    lDiv.appendChild(lTitle);
+    const activeEl = document.createElement('div');
+    activeEl.id = 'cols-active';
+    activeEl.style.cssText = 'min-height:80px;border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:4px';
+    App._colsBuildActive('qs_'+searchId, activeEl);
+    lDiv.appendChild(activeEl);
+    grid.appendChild(lDiv);
+
+    const rDiv = document.createElement('div');
+    const rTitle = document.createElement('div');
+    rTitle.style.cssText = 'font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text3)';
+    rTitle.textContent = 'Colonne disponibili';
+    rDiv.appendChild(rTitle);
+    const availEl = document.createElement('div');
+    availEl.id = 'cols-avail';
+    availEl.style.cssText = 'min-height:80px;border:1px dashed var(--border);border-radius:8px;padding:8px;max-height:320px;overflow-y:auto';
+
+    // Costruisce la lista disponibili con label estesa
+    availEl.innerHTML = '';
+    if(!availableItems.length){
+      const p = document.createElement('p'); p.style.cssText='color:var(--text3);font-size:13px;padding:8px'; p.textContent='Tutte le colonne sono già visibili'; availEl.appendChild(p);
+    } else {
+      availableItems.forEach(item=>{
+        const row = document.createElement('div');
+        row.style.cssText='padding:6px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px';
+        row.onmouseover=()=>row.style.background='var(--hover)'; row.onmouseout=()=>row.style.background='';
+        row.onclick=()=>App._colsAddItem(item.col,'qs_'+searchId);
+        const plus = document.createElement('span'); plus.style.color='var(--accent)'; plus.textContent='＋';
+        const lbl = document.createElement('span');
+        lbl.textContent = item.label;
+        if(item.fromTable !== srcTable){ lbl.style.cssText='color:var(--text3)'; }
+        row.appendChild(plus); row.appendChild(lbl); availEl.appendChild(row);
+      });
+    }
+    rDiv.appendChild(availEl);
+    grid.appendChild(rDiv);
+    body.appendChild(grid);
+
+    const footer = document.getElementById('modal-footer');
+    footer.innerHTML = '';
+    const bReset = document.createElement('button'); bReset.className='btn btn-ghost'; bReset.textContent='↺ Ripristina default'; bReset.onclick=()=>App._colsReset('qs_'+searchId);
+    const bCancel = document.createElement('button'); bCancel.className='btn btn-ghost'; bCancel.textContent='Annulla'; bCancel.onclick=()=>App.runQuickSearch(t,searchId);
+    const bSave = document.createElement('button'); bSave.className='btn btn-primary'; bSave.textContent='💾 Salva'; bSave.onclick=()=>App._colsSave('qs_'+searchId);
+    footer.appendChild(bReset); footer.appendChild(bCancel); footer.appendChild(bSave);
+
+    document.getElementById('modal-overlay').classList.add('open');
   },
 
   // ── Editor Layout Personalizzato (solo admin) ─────────────────────────────────
@@ -3467,7 +3576,7 @@ window.addEventListener('keydown',e=>App.handleKey(e));
   async function pollForUpdates(){
     const base = Store._nasBase();
     if(!base) return; // Solo se NAS configurato
-    if(document.getElementById('modal-overlay')?.classList.contains('active')) return; // Non aggiornare se c'è un form aperto
+    if(document.getElementById('modal-overlay')?.classList.contains('open')) return; // Non aggiornare se c'è un form aperto
 
     let changed = false;
     for(const t of TABLES){
@@ -3578,6 +3687,7 @@ const ADV_FIELDS = {
     { label:'Mansione',            field:'Mansione',                           type:'select', opts:'mansioni' },
     { label:'Tipologia Corso',     field:'Tipologia Corso',                    type:'select', opts:'tipologiaCorso' },
     { label:'Stato Corso',         field:'Stato Corso',                        type:'select', opts:'statoCoro' },
+    { label:'Stato Attestato',     field:'Stato Attestato',                    type:'select', opts:'statoAttestato' },
     { label:'Docente',             field:'Docente',                            type:'text' },
     { label:'Ore',                 field:'Ore',                                type:'text' },
     { label:'Data Corso',          field:'Data Corso',                         type:'date' },
@@ -3846,12 +3956,26 @@ App.applyAdvSearch = function(){
 App.resetAdvFilters = function(){
   App.advCriteria = [];
   App.advCustomFilterKey = null;
-App.advCompanyFilter = null;
+  App.advCompanyFilter = null;
   App.filter = '';
   document.getElementById('search-input').value = '';
   document.getElementById('adv-rows').innerHTML = '';
   _advRowCount = 0;
   App.addAdvRow();
+  // Ripristina le colonne originali se erano state cambiate da una ricerca rapida
+  console.log('resetAdvFilters: backup=', App._qsColsBackup);
+  if(App._qsColsBackup){
+    const { table, cols, isDefault } = App._qsColsBackup;
+    console.log('ripristino colonne per', table, '- isDefault:', isDefault, '- cols:', cols);
+    if(isDefault){
+      delete CustomCols._cache[table];
+    } else {
+      CustomCols._cache[table] = cols;
+    }
+    App._qsColsBackup = null;
+    // Ridisegna la tabella con le colonne ripristinate
+    App.renderTable(table);
+  }
 };
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
@@ -3983,6 +4107,14 @@ App.renderTable = function(t){
       return tb.localeCompare(ta); // newest first
     });
   }
+  // Filtra le società nascoste per l'utente corrente
+  const _hiddenCos2 = Auth.hiddenCompanies();
+  if(_hiddenCos2.length){
+    rows = rows.filter(r=>{
+      const az = String(r['Azienda']||r['azienda']||'').toLowerCase();
+      return !_hiddenCos2.some(h=>az.includes(h.toLowerCase()));
+    });
+  }
   this.filtered=rows;
   const tot=rows.length, tp=Math.max(1,Math.ceil(tot/this.pageSize));
   if(this.page>tp)this.page=tp;
@@ -3990,7 +4122,7 @@ App.renderTable = function(t){
 
   const advCount=(this.advCriteria?this.advCriteria.length:0) + (this.advCustomFilterKey?1:0);
   const advBadge=advCount?`<span style="background:var(--accent);color:#fff;border-radius:12px;padding:1px 8px;font-size:11px;margin-left:4px">${advCount} filtri</span>`:'';
-  const resetBtn=advCount?`<button class="btn btn-ghost" style="font-size:12px;color:var(--danger)" onclick="App.advCriteria=[];App.advCustomFilterKey=null;App.advCompanyFilter=null;App.renderTable('${t}')">✕ Rimuovi filtri</button>`:'';
+  const resetBtn=advCount?`<button class="btn btn-ghost" style="font-size:12px;color:var(--danger)" onclick="App.advCriteria=[];App.advCustomFilterKey=null;App.advCompanyFilter=null;App.resetAdvFilters();App.renderTable('${t}')">✕ Rimuovi filtri</button>`:'';
 
   // Selezione multipla: mantiene gli _id selezionati attraverso paginazione/filtri (this.selected)
   if(!this.selected) this.selected = new Set();
@@ -4078,7 +4210,7 @@ App.renderTable = function(t){
         ${Auth.can('import')?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.importXLSX('${t}')">↑ Importa</button>`:''}
         ${Auth.can('print')?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.printTable('${t}')">🖨 Stampa</button>`:''}
         ${Auth.can('clear_table')?`<button class="btn btn-ghost" style="font-size:13px;color:var(--danger);border-color:#fca5a5" onclick="App.clearTable('${t}')">🗑 Svuota</button>`:''}
-        ${Auth.isAdmin()&&TABLE_META[t]?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.openColsEditor('${t}')" title="Scegli quali colonne mostrare nell'elenco">⚙ Colonne</button>`:''}
+        ${Auth.isAdmin()&&TABLE_META[t]?`<button class="btn btn-ghost" style="font-size:13px" onclick="event.stopPropagation();App.openColsEditor('${t}')" title="Scegli quali colonne mostrare nell'elenco">⚙ Colonne</button>`:''}
         ${Auth.isAdmin()?`<button class="btn btn-ghost" style="font-size:13px" onclick="App.openLayoutEditor('${t}')" title="Personalizza l'ordine e la posizione dei campi (solo admin)">🧩 Personalizza Layout</button>`:''}
       </div>
       ${bulkBar}
@@ -4720,17 +4852,28 @@ App.runQuickSearch = function(t, id){
   const storeCols = Store.getCols(srcTable);
   let rows = allRows.filter(r => advMatchesCriteria(r, crit));
   if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
+  const _qsHidCo = Auth.hiddenCompanies();
+  if(_qsHidCo.length) rows = rows.filter(r=>{ const az=String(r['Azienda']||r['azienda']||'').toLowerCase(); return !_qsHidCo.some(h=>az.includes(h.toLowerCase())); });
 
-  // Use only cols that exist in store — normalizza storeCols che può essere array
-  // di stringhe o oggetti {name,...} a seconda di come il NAS ha salvato la struttura
+  // Colonne di tutte le tabelle per supportare colonne cross-table
+  const ALL_TABLES = ['dipendenti','contratti','formazione','sorveglianza'];
+  const allColsMap = {};
+  ALL_TABLES.forEach(tb=>{
+    Store.getCols(tb).map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(Boolean).forEach(c=>{ if(!allColsMap[c]) allColsMap[c]=tb; });
+  });
+  // Ricostruisce sempre la mappa colonna→tabella (non dipende dall'editor)
+  CustomCols._qsColTableMap = CustomCols._qsColTableMap || {};
+  CustomCols._qsColTableMap[id] = allColsMap;
+
   const storeColNames = storeCols.map(c => typeof c === 'string' ? c : (c.name||c.field||''));
   const defaultCols = (s.cols && s.cols.length)
     ? s.cols.filter(c => c !== '__proroga_max')
     : storeColNames.filter(c => c && c !== '_id');
   // Usa colonne personalizzate se presenti (chiave: qs_<id>)
+  // Non filtriamo per storeColNames perché le cols custom possono venire da tabelle diverse
   const customQsCols = CustomCols.get('qs_'+id, null);
   const cols = (customQsCols && customQsCols.length)
-    ? customQsCols.filter(c => storeColNames.includes(c) || c === '__proroga_max')
+    ? customQsCols
     : defaultCols;
 
   // Sort by Cognome if available
@@ -4738,13 +4881,34 @@ App.runQuickSearch = function(t, id){
 
   document.getElementById('modal-title').textContent = s.icon+' '+s.label+' ('+rows.length+' record)';
 
+  // Mappa colonna→tabella per colonne cross-table (salvata dall'editor colonne)
+  const colTableMap = CustomCols._qsColTableMap?.[id] || {};
+  // Indice per lookup cross-table: per ogni tabella non-sorgente, mappa N°Socio→riga
+  const crossTableIdx = {};
+  ['dipendenti','contratti','formazione','sorveglianza'].filter(tb=>tb!==srcTable).forEach(tb=>{
+    const idx = {};
+    Store.getRows(tb).forEach(r=>{ const k=String(r['N° Socio']||r['Id Dipendente (N° Socio)']||'').trim(); if(k) idx[k]=r; });
+    crossTableIdx[tb] = idx;
+  });
+  const getSocioKey = row => String(row['N° Socio']||row['Id Dipendente (N° Socio)']||'').trim();
+
   // Build HTML table like the original reports
   const thead = cols.map(c => `<th>${esc(c)}</th>`).join('');
 
   // Status color for certain columns
   const tbody = rows.map((row, ri) => {
     const tds = cols.map(c => {
-      const v = row[c] || '';
+      // Se la colonna viene da una tabella diversa, cerca il valore lì
+      let v = row[c];
+      if((v === undefined || v === null || v === '') && colTableMap[c] && colTableMap[c] !== srcTable){
+        const altTable = colTableMap[c];
+        const socioKey = getSocioKey(row);
+        if(socioKey && crossTableIdx[altTable]){
+          const altRow = crossTableIdx[altTable][socioKey];
+          if(altRow) v = altRow[c];
+        }
+      }
+      v = v || '';
       if(c === 'Stato idoneità' || c === 'Stato Corso' || c === 'Stato Dipendente') return '<td>'+pill(v)+'</td>';
       // Highlight expiring dates in orange/red
       if(c.toLowerCase().includes('scadenza') || c.toLowerCase().includes('scad')){
@@ -4785,15 +4949,31 @@ App.applyQuickFilter = function(t, id){
   const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
   const s = searches.find(x => x.id === id);
   if(!s) return;
-  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
+  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel);
+  const srcTable = s.table || t;
   App.advCriteria = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   App.advCustomFilterKey = s.customFilter || null;
   App.advCompanyFilter = s._companyFilter || null;
   App.filter = '';
   document.getElementById('search-input').value = '';
   App.page = 1;
+  // Applica temporaneamente le colonne personalizzate della ricerca rapida alla tabella
+  const customQsCols = CustomCols.get('qs_'+id, null);
+  if(customQsCols && customQsCols.length){
+    // Salva le colonne ATTUALI della tabella (quelle vere, prima di qualsiasi sovrascrittura)
+    // solo se non è già stato salvato un backup (evita di sovrascrivere il backup con cols di un'altra ricerca)
+    if(!App._qsColsBackup || App._qsColsBackup.table !== srcTable){
+      App._qsColsBackup = {
+        table: srcTable,
+        cols: CustomCols._cache[srcTable] !== undefined ? CustomCols._cache[srcTable] : null,
+        isDefault: CustomCols._cache[srcTable] === undefined
+      };
+    }
+    CustomCols._cache[srcTable] = customQsCols;
+  }
   App.closeModal();
-  App.renderTable(t);
+  App.show(srcTable);
+  App.renderTable(srcTable);
   toast(s.icon+' '+s.label+' — '+App.filtered.length+' risultati');
 };
 
@@ -4809,6 +4989,8 @@ App.printQuickResult = function(id, t){
   const storeCols = Store.getCols(srcTable);
   let rows = allRows.filter(r => advMatchesCriteria(r, crit));
   if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
+  const _prHidCo = Auth.hiddenCompanies();
+  if(_prHidCo.length) rows = rows.filter(r=>{ const az=String(r['Azienda']||r['azienda']||'').toLowerCase(); return !_prHidCo.some(h=>az.includes(h.toLowerCase())); });
   if(rows.includes && rows.sort) rows.sort((a,b) => (a.Cognome||'').localeCompare(b.Cognome||''));
   const storeColNames = storeCols.map(c => typeof c === 'string' ? c : (c.name||c.field||''));
   const cols = (s.cols && s.cols.length)
