@@ -316,7 +316,7 @@ const OPT = {
   statoDip: ['ATTIVO','NON IN FORZA','NON ATTIVO'],
   mansioni: ['Addetto controllo accessi','Addetto manutenzione aree verdi','Addetto pulizie','Addetto pulizie esterne','Addetto Ristorazione','Autista pat. B','Cameriera ai piani','Cameriera ai piani / Addetto ristorazione','Custode','Facchino','Facchino / Muletto',"Facchino d'albergo","Facchino d'albergo / Addetto ristorazione",'Fattorino','Governante','Impiegato amministrativo','Magazziniere','Magazziniere / Muletto','Manutentore'],
   tipoPermesso: ['Asilo','Attesa occupazione','Carta di soggiorno','Lavoro autonomo','Lavoro subordinato','Motivi Familiari','Motivi di studio','Protezione Internazionale','Protezione Speciale','Protezione Sussidiaria','Protezione Temporanea','Soggiornante Lungo Periodo'],
-  tipologiaCorso: ['Corso Base','Haccp','Preposto','Carrelli Elevatori / Muletti','Lavori in quota','Piattaforme aeree','Primo Soccorso','Antincendio','RLS'],
+  tipologiaCorso: ['Corso Base','Haccp','Preposto','Carrelli Elevatori / Muletti','Lavori in quota','Piattaforme aeree','Primo Soccorso','Antincendio','RLS','Corso datore di lavoro'],
   statoCoro: ['Completato','Da completare'],
   statoAttestato: ['Ricevuto','Non ricevuto'],
   idoneo: ['Idoneo','Idoneo con prescrizioni','In attesa visita','In attesa idoneità'],
@@ -3675,6 +3675,8 @@ const ADV_FIELDS = {
     { label:'Data Proroga 2',      field:'Data Proroga 2',                     type:'date' },
     { label:'Data Proroga 3',      field:'Data Proroga 3',                     type:'date' },
     { label:'Data Proroga 4',      field:'Data Proroga 4',                     type:'date' },
+    { label:'Fine periodo 1° ingresso', field:'Fine periodo 1° ingresso ',     type:'date' },
+    { label:'Fine 24 mesi',        field:'Fine 24 mesi',                       type:'date' },
     { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',           type:'text' },
   ],
   formazione: [
@@ -3770,11 +3772,12 @@ App.advCustomFilterKey = null;
 App.advCompanyFilter = null;
 
 App.openAdvSearch = function(t){
+  if(!TABLE_META[t]){ toast('Ricerca avanzata non disponibile per questa vista','error'); return; }
   _advTable = t;
   _advRowCount = 0;
   App.advCriteria = [];
   App.advCustomFilterKey = null;
-App.advCompanyFilter = null;
+  App.advCompanyFilter = null;
 
   document.getElementById('modal-title').textContent = '🔍 Ricerca Avanzata — '+TABLE_META[t].label;
   document.getElementById('modal-body').innerHTML = `
@@ -3799,8 +3802,10 @@ App.advCompanyFilter = null;
 };
 
 App.addAdvRow = function(){
+  try{
   const t = _advTable;
   const fields = ADV_FIELDS[t] || [];
+  console.log('addAdvRow: t=',t,'fields=',fields.length);
   const rowId = _advRowCount++;
   const isFirst = rowId === 0;
 
@@ -3830,6 +3835,7 @@ App.addAdvRow = function(){
       <button type="button" class="adv-del-btn" onclick="document.getElementById('adv-row-${rowId}').remove()" title="Rimuovi">✕</button>
     </div>`;
   document.getElementById('adv-rows').appendChild(row);
+  }catch(e){ console.error('addAdvRow error:', e); }
 };
 
 App.toggleConnector = function(rowId){
@@ -3958,22 +3964,16 @@ App.resetAdvFilters = function(){
   App.advCustomFilterKey = null;
   App.advCompanyFilter = null;
   App.filter = '';
-  document.getElementById('search-input').value = '';
-  document.getElementById('adv-rows').innerHTML = '';
-  _advRowCount = 0;
-  App.addAdvRow();
+  const si = document.getElementById('search-input');
+  if(si) si.value = '';
+  const ar = document.getElementById('adv-rows');
+  if(ar){ ar.innerHTML = ''; _advRowCount = 0; App.addAdvRow(); }
   // Ripristina le colonne originali se erano state cambiate da una ricerca rapida
-  console.log('resetAdvFilters: backup=', App._qsColsBackup);
   if(App._qsColsBackup){
     const { table, cols, isDefault } = App._qsColsBackup;
-    console.log('ripristino colonne per', table, '- isDefault:', isDefault, '- cols:', cols);
-    if(isDefault){
-      delete CustomCols._cache[table];
-    } else {
-      CustomCols._cache[table] = cols;
-    }
+    if(isDefault){ delete CustomCols._cache[table]; }
+    else { CustomCols._cache[table] = cols; }
     App._qsColsBackup = null;
-    // Ridisegna la tabella con le colonne ripristinate
     App.renderTable(table);
   }
 };
@@ -4982,7 +4982,7 @@ App.printQuickResult = function(id, t){
   const searches = CustomQuickSearches.getFullList(t, QUICK_SEARCHES[t] || []);
   const s = searches.find(x => x.id === id);
   if(!s) return;
-  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel); // applica l'etichetta personalizzata, preservando sempre il nome originale
+  if(!s._originalLabel) s._originalLabel = s.label; s.label = CustomLabels.get(t, s.id, s._originalLabel);
   const srcTable = s.table || t;
   const crit = s.dynamic ? buildDynamicCriteria(s.dynamic) : s.criteria;
   const allRows = Store.getRows(srcTable);
@@ -4992,14 +4992,33 @@ App.printQuickResult = function(id, t){
   const _prHidCo = Auth.hiddenCompanies();
   if(_prHidCo.length) rows = rows.filter(r=>{ const az=String(r['Azienda']||r['azienda']||'').toLowerCase(); return !_prHidCo.some(h=>az.includes(h.toLowerCase())); });
   if(rows.includes && rows.sort) rows.sort((a,b) => (a.Cognome||'').localeCompare(b.Cognome||''));
+
+  // Usa colonne personalizzate se presenti, altrimenti default
   const storeColNames = storeCols.map(c => typeof c === 'string' ? c : (c.name||c.field||''));
-  const cols = (s.cols && s.cols.length)
-    ? s.cols.filter(c => c !== '__proroga_max')
-    : storeColNames.filter(c => c && c !== '_id');
+  const defaultCols = (s.cols && s.cols.length) ? s.cols.filter(c=>c!=='__proroga_max') : storeColNames.filter(c=>c&&c!=='_id');
+  const customQsCols = CustomCols.get('qs_'+id, null);
+  const cols = (customQsCols && customQsCols.length) ? customQsCols : defaultCols;
+
+  // Cross-table lookup
+  const allColsMap = {};
+  ['dipendenti','contratti','formazione','sorveglianza'].forEach(tb=>{
+    Store.getCols(tb).map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(Boolean).forEach(c=>{ if(!allColsMap[c]) allColsMap[c]=tb; });
+  });
+  const crossTableIdx = {};
+  ['dipendenti','contratti','formazione','sorveglianza'].filter(tb=>tb!==srcTable).forEach(tb=>{
+    const idx={}; Store.getRows(tb).forEach(r=>{ const k=String(r['N° Socio']||r['Id Dipendente (N° Socio)']||'').trim(); if(k) idx[k]=r; }); crossTableIdx[tb]=idx;
+  });
+  const getSocioKey = row => String(row['N° Socio']||row['Id Dipendente (N° Socio)']||'').trim();
+
   const oggi = new Date().toLocaleDateString('it-IT');
   const thead = cols.map(c=>`<th>${esc(c)}</th>`).join('');
   const tbody = rows.map(r=>'<tr>'+cols.map(c=>{
-    const v=r[c]||'';
+    let v = r[c];
+    if((v===undefined||v===null||v==='') && allColsMap[c] && allColsMap[c]!==srcTable){
+      const altRow = crossTableIdx[allColsMap[c]]?.[getSocioKey(r)];
+      if(altRow) v = altRow[c];
+    }
+    v = v||'';
     const d=advParseDate(v);
     const now=new Date(), lim30=new Date(); lim30.setDate(now.getDate()+30);
     const style=(c.toLowerCase().includes('scad')&&d)?(d<now?'color:#dc2626;font-weight:700':d<lim30?'color:#d97706;font-weight:700':''):'';
@@ -5049,11 +5068,34 @@ App.exportQuickResult = function(id, t){
     const storeColNames = storeCols.map(c => typeof c === 'string' ? c : (c.name || c.field || ''));
     let rows = allRows.filter(r => advMatchesCriteria(r, crit));
     if(s.customFilter) rows = applyCustomFilter(s.customFilter, rows, s._companyFilter);
-    const cols = s.cols && s.cols.length
-      ? s.cols.filter(c => c !== '__proroga_max')
-      : storeColNames.filter(c => c && c !== '_id');
+    const _exHidCo = Auth.hiddenCompanies();
+    if(_exHidCo.length) rows = rows.filter(r=>{ const az=String(r['Azienda']||r['azienda']||'').toLowerCase(); return !_exHidCo.some(h=>az.includes(h.toLowerCase())); });
+
+    // Usa colonne personalizzate se presenti
+    const defaultCols = s.cols && s.cols.length ? s.cols.filter(c=>c!=='__proroga_max') : storeColNames.filter(c=>c&&c!=='_id');
+    const customQsCols = CustomCols.get('qs_'+id, null);
+    const cols = (customQsCols && customQsCols.length) ? customQsCols : defaultCols;
     if(!cols.length){ toast('Nessuna colonna da esportare','error'); return; }
-    const data = [cols, ...rows.map(r => cols.map(c => r[c] ?? ''))];
+
+    // Cross-table lookup
+    const allColsMap = {};
+    ['dipendenti','contratti','formazione','sorveglianza'].forEach(tb=>{
+      Store.getCols(tb).map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(Boolean).forEach(c=>{ if(!allColsMap[c]) allColsMap[c]=tb; });
+    });
+    const crossTableIdx = {};
+    ['dipendenti','contratti','formazione','sorveglianza'].filter(tb=>tb!==srcTable).forEach(tb=>{
+      const idx={}; Store.getRows(tb).forEach(r=>{ const k=String(r['N° Socio']||r['Id Dipendente (N° Socio)']||'').trim(); if(k) idx[k]=r; }); crossTableIdx[tb]=idx;
+    });
+    const getSocioKey = row => String(row['N° Socio']||row['Id Dipendente (N° Socio)']||'').trim();
+
+    const data = [cols, ...rows.map(r => cols.map(c => {
+      let v = r[c];
+      if((v===undefined||v===null||v==='') && allColsMap[c] && allColsMap[c]!==srcTable){
+        const altRow = crossTableIdx[allColsMap[c]]?.[getSocioKey(r)];
+        if(altRow) v = altRow[c];
+      }
+      return v ?? '';
+    }))];
     const ws = XLSX.utils.aoa_to_sheet(data);
     ws['!cols'] = cols.map(c => ({wch: Math.max(c.length, 12)}));
     const wb = XLSX.utils.book_new();
