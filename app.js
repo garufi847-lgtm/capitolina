@@ -313,7 +313,7 @@ const OPT = {
   domicilio: ['Sì','No'],
   tipoDoc: ['Carta Identità','Carta Identità Europea','Patente','Passaporto','PSP'],
   statoSocio: ['ATTIVO','NON ATTIVO'],
-  statoDip: ['ATTIVO','NON IN FORZA','NON ATTIVO'],
+  statoDip: ['ATTIVO','CESSATO','NON ATTIVO'],
   mansioni: ['Addetto controllo accessi','Addetto manutenzione aree verdi','Addetto pulizie','Addetto pulizie esterne','Addetto Ristorazione','Autista pat. B','Cameriera ai piani','Cameriera ai piani / Addetto ristorazione','Custode','Facchino','Facchino / Muletto',"Facchino d'albergo","Facchino d'albergo / Addetto ristorazione",'Fattorino','Governante','Impiegato amministrativo','Magazziniere','Magazziniere / Muletto','Manutentore'],
   tipoPermesso: ['Asilo','Attesa occupazione','Carta di soggiorno','Lavoro autonomo','Lavoro subordinato','Motivi Familiari','Motivi di studio','Protezione Internazionale','Protezione Speciale','Protezione Sussidiaria','Protezione Temporanea','Soggiornante Lungo Periodo'],
   tipologiaCorso: ['Corso Base','Haccp','Preposto','Carrelli Elevatori / Muletti','Lavori in quota','Piattaforme aeree','Primo Soccorso','Antincendio','RLS','Corso datore di lavoro'],
@@ -1940,6 +1940,20 @@ const App = {
           row[c]=el?el.value:'';
         }
       } catch(e){ row[c]=''; }
+    }
+    // Controllo unicità N° Socio
+    const nSocioFields = { dipendenti:'N° Socio', contratti:'Id Dipendente (N° Socio)', formazione:'Id Dipendente (N° Socio)', sorveglianza:'Id Dipendente (N° Socio)' };
+    const nSocioField = nSocioFields[table];
+    if(nSocioField && row[nSocioField] && table === 'dipendenti'){
+      const nSocioVal = String(row[nSocioField]).trim().toUpperCase();
+      const duplicate = Store.getRows('dipendenti').find((r,i)=>{
+        if(idx!==null && i===idx) return false;
+        return String(r['N° Socio']||'').trim().toUpperCase() === nSocioVal;
+      });
+      if(duplicate){
+        toast(`⚠️ N° Socio "${row[nSocioField]}" già esistente (${duplicate['Cognome']||''} ${duplicate['Nome']||''}) — usa un numero diverso`, 'error');
+        return;
+      }
     }
     try{
       if(idx!==null){
@@ -4059,7 +4073,7 @@ function evalCriterion(row, c){
     const rv = rawVal.toLowerCase();
     const v1 = val1.toLowerCase();
     // Equivalenza: "non in forza" e "non attivo" sono lo stesso stato in tabelle diverse
-    const NON_ATTIVO_EQUIV = ['non in forza','non attivo'];
+    const NON_ATTIVO_EQUIV = ['cessato','non attivo'];
     const rvNorm = NON_ATTIVO_EQUIV.includes(rv) ? 'non_attivo_equiv' : rv;
     const v1Norm = NON_ATTIVO_EQUIV.includes(v1) ? 'non_attivo_equiv' : v1;
     if(op==='is')           return rvNorm === v1Norm;
@@ -4420,11 +4434,11 @@ const QUICK_SEARCHES = {
     {
       id:'dipendenti_non_forza', icon:'❌',
       label:'Dipendenti Non in Forza',
-      desc:'Dipendenti con stato NON IN FORZA',
+      desc:'Dipendenti con stato CESSATO',
       table:'dipendenti',
       cols:['N° Socio','Azienda','Cognome','Nome','Mansione','Stato Dipendente','Data assunzione'],
       criteria:[
-        {field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'NON IN FORZA', val2:'', connector:'AND'},
+        {field:'Stato Dipendente', fieldDef:{type:'select'}, op:'is', val1:'CESSATO', val2:'', connector:'AND'},
       ]
     },
   ],
