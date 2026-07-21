@@ -963,9 +963,15 @@ const CustomCols = {
   async save(t, cols){
     this._cache[t] = cols;
     localStorage.setItem(this._key(t), JSON.stringify(cols));
+    console.log('CustomCols.save:', t, '→', cols.length, 'colonne');
     const base = Store._nasBase();
     if(base){
-      try{ await fetch(`${base}/api/colsconfig_${t}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cols}) }); }catch(e){}
+      try{
+        const url = `${base}/api/colsconfig_${t}`;
+        console.log('CustomCols.save: POST a', url);
+        const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cols}) });
+        console.log('CustomCols.save: risposta', r.status);
+      }catch(e){ console.error('CustomCols.save error:', e); }
     }
   },
 
@@ -980,6 +986,36 @@ const CustomCols = {
     localStorage.removeItem(this._key(t));
     const base = Store._nasBase();
     if(base){ try{ fetch(`${base}/api/colsconfig_${t}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cols:[]}) }); }catch(e){} }
+  },
+
+  // Carica tutte le colonne personalizzate delle ricerche rapide (qs_*) da localStorage + NAS
+  async loadAllQs(){
+    // Prima carica da localStorage (fallback offline)
+    Object.keys(localStorage).filter(k=>k.startsWith('gest_colscfg_qs_')).forEach(k=>{
+      const id = k.replace('gest_colscfg_','');
+      try{ const p=JSON.parse(localStorage.getItem(k)); if(Array.isArray(p)&&p.length) this._cache[id]=p; }catch(e){}
+    });
+    const base = Store._nasBase();
+    if(!base) return;
+    try{
+      const r = await fetch(`${base}/api/colsconfig_keys`, { cache:'no-store' });
+      console.log('loadAllQs: colsconfig_keys status', r.status);
+      if(!r.ok) return;
+      const { keys } = await r.json();
+      console.log('loadAllQs: chiavi trovate sul NAS:', keys);
+      await Promise.all(keys.map(async id=>{
+        try{
+          const r2 = await fetch(`${base}/api/colsconfig_${id}`, { cache:'no-store' });
+          if(!r2.ok) return;
+          const d = await r2.json();
+          if(Array.isArray(d?.cols) && d.cols.length){
+            this._cache[id] = d.cols;
+            localStorage.setItem(this._key(id), JSON.stringify(d.cols));
+            console.log('loadAllQs: caricato', id, '→', d.cols.length, 'colonne');
+          }
+        }catch(e){}
+      }));
+    }catch(e){ console.error('loadAllQs error:', e); }
   },
 };
 
@@ -3574,6 +3610,8 @@ window.addEventListener('keydown',e=>App.handleKey(e));
   try{ await Store.load(); }catch(e){ console.error('Store error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','aziende'].map(t=>CustomLayout.load(t))); }catch(e){ console.warn('CustomLayout boot load error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','aziende'].map(t=>CustomCols.load(t))); }catch(e){ console.warn('CustomCols boot load error:',e); }
+  // Carica le colonne personalizzate di tutte le ricerche rapide (qs_*) da localStorage + NAS
+  try{ await CustomCols.loadAllQs(); }catch(e){ console.warn('CustomCols QS load error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza','dashboard'].map(t=>CustomLabels.load(t))); }catch(e){ console.warn('CustomLabels boot load error:',e); }
   try{ await Promise.all(['dipendenti','contratti','formazione','sorveglianza'].map(t=>CustomQuickSearches.load(t))); }catch(e){ console.warn('CustomQuickSearches boot load error:',e); }
   document.getElementById('loading').classList.add('hidden');
@@ -3589,8 +3627,8 @@ window.addEventListener('keydown',e=>App.handleKey(e));
 
   async function pollForUpdates(){
     const base = Store._nasBase();
-    if(!base) return; // Solo se NAS configurato
-    if(document.getElementById('modal-overlay')?.classList.contains('open')) return; // Non aggiornare se c'è un form aperto
+    if(!base) return;
+    if(document.getElementById('modal-overlay')?.classList.contains('open')) return;
 
     let changed = false;
     for(const t of TABLES){
@@ -3599,7 +3637,6 @@ window.addEventListener('keydown',e=>App.handleKey(e));
         if(!r.ok) continue;
         const remote = await r.json();
         if(!remote?.rows?.length) continue;
-        // Confronto veloce: numero di righe e ultima riga
         const local = Store.data[t];
         const remoteCount = remote.rows.length;
         const localCount  = local?.rows?.length ?? -1;
@@ -3610,16 +3647,35 @@ window.addEventListener('keydown',e=>App.handleKey(e));
           localStorage.setItem('gest_data_'+t, JSON.stringify(remote));
           changed = true;
         }
-      }catch(e){ /* NAS temporaneamente non raggiungibile, riprova al prossimo ciclo */ }
+      }catch(e){}
     }
 
-    if(changed && Auth.current()){
-      // Aggiorna la tabella visibile senza ricaricare la pagina
-      const currentView = App.currentView;
-      if(currentView && TABLE_META[currentView]){
-        App.renderTable(currentView);
+    // Sincronizza colonne personalizzate (tabelle + ricerche rapide) tra tutti i PC
+    try{
+      const kr = await fetch(`${base}/api/colsconfig_keys`, { cache:'no-store' });
+      if(kr.ok){
+        const { keys } = await kr.json();
+        for(const id of (keys||[])){
+          try{
+            const r2 = await fetch(`${base}/api/colsconfig_${id}`, { cache:'no-store' });
+            if(!r2.ok) continue;
+            const d = await r2.json();
+            if(!Array.isArray(d?.cols)||!d.cols.length) continue;
+            const localStr = localStorage.getItem('gest_colscfg_'+id);
+            const localCols = localStr ? JSON.parse(localStr) : null;
+            if(JSON.stringify(d.cols) !== JSON.stringify(localCols)){
+              CustomCols._cache[id] = d.cols;
+              localStorage.setItem('gest_colscfg_'+id, JSON.stringify(d.cols));
+              changed = true;
+            }
+          }catch(e){}
+        }
       }
-      // Piccolo indicatore visivo discreto
+    }catch(e){}
+
+    if(changed && Auth.current()){
+      const currentView = App.currentView;
+      if(currentView && TABLE_META[currentView]) App.renderTable(currentView);
       const badge = document.getElementById('app-version-badge');
       if(badge){
         const orig = badge.textContent;
@@ -3641,100 +3697,116 @@ const APP_VERSION = '2026-07-09-A';
 // Campi disponibili per tabella con tipo e opzioni
 const ADV_FIELDS = {
   dipendenti: [
-    { label:'N° Socio',            field:'N° Socio',                          type:'text' },
-    { label:'Cognome',             field:'Cognome',                           type:'text' },
-    { label:'Nome',                field:'Nome',                              type:'text' },
-    { label:'Azienda',             field:'Azienda',                           type:'select', opts:'aziende' },
-    { label:'Stato Dipendente',    field:'Stato Dipendente',                  type:'select', opts:'statoDip' },
-    { label:'Mansione',            field:'Mansione',                          type:'select', opts:'mansioni' },
-    { label:'Sesso',               field:'Sesso',                             type:'select', opts:'sesso' },
-    { label:'Codice Fiscale',      field:'Codice Fiscale',                    type:'text' },
-    { label:'Cittadinanza',        field:'Cittadinanza',                      type:'text' },
-    { label:'Luogo di Nascita',    field:'Luogo di Nascita',                  type:'text' },
-    { label:'Data di Nascita',     field:'Data di Nascita',                   type:'date' },
-    { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',          type:'text' },
-    { label:'Data assunzione',     field:'Data assunzione',                   type:'date' },
-    { label:'Tipo Permesso',       field:'Tipo permesso',                     type:'select', opts:'tipoPermesso' },
-    { label:'Scad. Permesso',      field:'Data scadenza Permesso Soggiorno',  type:'date' },
-    { label:'Data rilascio Permesso', field:'Data rilascio Permesso Soggiorno', type:'date' },
-    { label:'Stato Socio',         field:'Stato Socio',                       type:'select', opts:'statoSocio' },
-    { label:'Comune Residenza',    field:'Comune Residenza',                  type:'text' },
-    { label:'Provincia Residenza', field:'Provincia Residenza',               type:'text' },
-    { label:'Telefono',            field:'Telefono Cellulare',                type:'text' },
-    { label:'Email',               field:'Email',                             type:'text' },
-    { label:'Tipo Documento',      field:'Tipo Documento',                    type:'select', opts:'tipoDoc' },
-    { label:'Scadenza Documento',  field:'Scadenza Documento',                type:'date' },
+    { label:'N° Socio',                field:'N° Socio',                           type:'text' },
+    { label:'Cognome',                 field:'Cognome',                            type:'text' },
+    { label:'Nome',                    field:'Nome',                               type:'text' },
+    { label:'Azienda',                 field:'Azienda',                            type:'select', opts:'aziende' },
+    { label:'Stato Dipendente',        field:'Stato Dipendente',                   type:'select', opts:'statoDip' },
+    { label:'Stato Socio',             field:'Stato Socio',                        type:'select', opts:'statoSocio' },
+    { label:'Mansione',                field:'Mansione',                           type:'select', opts:'mansioni' },
+    { label:'Sesso',                   field:'Sesso',                              type:'select', opts:'sesso' },
+    { label:'Codice Fiscale',          field:'Codice Fiscale',                     type:'text' },
+    { label:'Cittadinanza',            field:'Cittadinanza',                       type:'text' },
+    { label:'Data di Nascita',         field:'Data di Nascita',                    type:'date' },
+    { label:'Luogo di Nascita',        field:'Luogo di Nascita',                   type:'text' },
+    { label:'Indirizzo Residenza',     field:'Indirizzo Residenza',                type:'text' },
+    { label:'Comune Residenza',        field:'Comune Residenza',                   type:'text' },
+    { label:'CAP',                     field:'CAP',                                type:'text' },
+    { label:'Provincia Residenza',     field:'Provincia Residenza',                type:'text' },
+    { label:'Telefono Cellulare',      field:'Telefono Cellulare',                 type:'text' },
+    { label:'Altro Recapito',          field:'Altro Recapito',                     type:'text' },
+    { label:'Email',                   field:'Email',                              type:'text' },
+    { label:'Tipo Documento',          field:'Tipo Documento',                     type:'select', opts:'tipoDoc' },
+    { label:'Data Rilascio Documento', field:'Data Rilascio Documento',            type:'date' },
+    { label:'Scadenza Documento',      field:'Scadenza Documento',                 type:'date' },
+    { label:'Appalto / Sede',          field:'Appalto / sede di lavoro',           type:'text' },
+    { label:'Data assunzione',         field:'Data assunzione',                    type:'date' },
+    { label:'Data fine rapporto',      field:'Data fine rapporto',                 type:'date' },
+    { label:'Tipo Permesso',           field:'Tipo permesso',                      type:'select', opts:'tipoPermesso' },
+    { label:'Rilasciato da Questura',  field:'Rilasciato da Questura',             type:'text' },
+    { label:'Data rilascio Permesso',  field:'Data rilascio Permesso Soggiorno',   type:'date' },
+    { label:'Scad. Permesso Soggiorno',field:'Data scadenza Permesso Soggiorno',   type:'date' },
+    { label:'Data Delibera Ammissione',field:'Data Delibera Ammissione',           type:'date' },
+    { label:'Data Delibera Recesso',   field:'Data Delibera Recesso / Esclusione', type:'date' },
+    { label:'Note',                    field:'Note',                               type:'text' },
   ],
   contratti: [
-    { label:'ID Socio',            field:'Id Dipendente (N° Socio)',           type:'text' },
-    { label:'Cognome',             field:'Cognome',                            type:'text' },
-    { label:'Nome',                field:'Nome',                               type:'text' },
-    { label:'Azienda',             field:'Azienda',                            type:'select', opts:'aziende' },
-    { label:'Stato Dipendente',    field:'Stato Dipendente',                   type:'select', opts:'statoDip' },
-    { label:'Mansione',            field:'Mansione',                           type:'select', opts:'mansioni' },
-    { label:'Tipologia contrattuale', field:'Tipologia contrattuale',          type:'select', opts:'tipoContratto' },
-    { label:'Tipo orario',         field:'Tipologia orario contrattuale',      type:'select', opts:'orario' },
-    { label:'Livello',             field:'Livello',                            type:'select', opts:'livello' },
-    { label:'Ore settimanali',     field:'Ore contrattuali settimanali',       type:'select', opts:'oreSettimanali' },
-    { label:'CCNL',                field:'CCNL',                               type:'text' },
-    { label:'Data inizio',         field:'Data inizio',                        type:'date' },
-    { label:'Data fine',           field:'Data fine',                          type:'date' },
-    { label:'Scadenza Contratto',  field:'Scadenza Contratto',                 type:'date' },
-    { label:'Data assunzione',     field:'Data Assunzione',                    type:'date' },
-    { label:'Causa fine rapporto', field:'Causa fine rapporto',                type:'select', opts:'causaFine' },
-    { label:'Data fine rapporto',  field:'Data fine rapporto',                 type:'date' },
-    { label:'Requisiti Incentivi', field:'Requisiti Incentivi',                type:'select', opts:'incentivi' },
-    { label:'Assistenza Sanitaria',field:'Assistenza Sanitaria integrativa',   type:'select', opts:'assistenza' },
-    { label:'Data Proroga 1',      field:'Data Proroga 1',                     type:'date' },
-    { label:'Data Proroga 2',      field:'Data Proroga 2',                     type:'date' },
-    { label:'Data Proroga 3',      field:'Data Proroga 3',                     type:'date' },
-    { label:'Data Proroga 4',      field:'Data Proroga 4',                     type:'date' },
-    { label:'Fine periodo 1° ingresso', field:'Fine periodo 1° ingresso ',     type:'date' },
-    { label:'Fine 24 mesi',        field:'Fine 24 mesi',                       type:'date' },
-    { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',           type:'text' },
+    { label:'ID Socio',                field:'Id Dipendente (N° Socio)',            type:'text' },
+    { label:'Cognome',                 field:'Cognome',                             type:'text' },
+    { label:'Nome',                    field:'Nome',                                type:'text' },
+    { label:'Azienda',                 field:'Azienda',                             type:'select', opts:'aziende' },
+    { label:'Stato Dipendente',        field:'Stato Dipendente',                    type:'select', opts:'statoDip' },
+    { label:'Mansione',                field:'Mansione',                            type:'select', opts:'mansioni' },
+    { label:'Matricola',               field:'Matricola',                           type:'text' },
+    { label:'Tipologia contrattuale',  field:'Tipologia contrattuale',              type:'select', opts:'tipoContratto' },
+    { label:'Tipo orario',             field:'Tipologia orario contrattuale',       type:'select', opts:'orario' },
+    { label:'Livello',                 field:'Livello',                             type:'select', opts:'livello' },
+    { label:'Ore settimanali',         field:'Ore contrattuali settimanali',        type:'select', opts:'oreSettimanali' },
+    { label:'Appalto / Sede',          field:'Appalto / sede di lavoro',            type:'text' },
+    { label:'Data Assunzione',         field:'Data Assunzione',                     type:'date' },
+    { label:'Scadenza Contratto',      field:'Scadenza Contratto',                  type:'date' },
+    { label:'Data fine rapporto',      field:'Data fine rapporto',                  type:'date' },
+    { label:'Causa fine rapporto',     field:'Causa fine rapporto',                 type:'select', opts:'causaFine' },
+    { label:'Data Proroga 1',          field:'Data Proroga 1',                      type:'date' },
+    { label:'Data Proroga 2',          field:'Data Proroga 2',                      type:'date' },
+    { label:'Data Proroga 3',          field:'Data Proroga 3',                      type:'date' },
+    { label:'Data Proroga 4',          field:'Data Proroga 4',                      type:'date' },
+    { label:'Fine periodo 1° ingresso',field:'Fine periodo 1° ingresso ',           type:'date' },
+    { label:'Fine 24 mesi',            field:'Fine 24 mesi',                        type:'date' },
+    { label:'Requisiti Incentivi',     field:'Requisiti Incentivi',                 type:'select', opts:'incentivi' },
+    { label:'Assistenza Sanitaria',    field:'Assistenza Sanitaria integrativa',    type:'select', opts:'assistenza' },
+    { label:'Note',                    field:'Note',                                type:'text' },
   ],
   formazione: [
-    { label:'ID Socio',            field:'Id Dipendente (N° Socio)',           type:'text' },
-    { label:'Cognome',             field:'Cognome',                            type:'text' },
-    { label:'Nome',                field:'Nome',                               type:'text' },
-    { label:'Data di Nascita',     field:'Data di nascita',                    type:'date' },
-    { label:'Azienda',             field:'Azienda',                            type:'select', opts:'aziende' },
-    { label:'Stato Dipendente',    field:'Stato Dipendente',                   type:'select', opts:'statoDip' },
-    { label:'Mansione',            field:'Mansione',                           type:'select', opts:'mansioni' },
-    { label:'Tipologia Corso',     field:'Tipologia Corso',                    type:'select', opts:'tipologiaCorso' },
-    { label:'Stato Corso',         field:'Stato Corso',                        type:'select', opts:'statoCoro' },
-    { label:'Stato Attestato',     field:'Stato Attestato',                    type:'select', opts:'statoAttestato' },
-    { label:'Docente',             field:'Docente',                            type:'text' },
-    { label:'Ore',                 field:'Ore',                                type:'text' },
-    { label:'Data Corso',          field:'Data Corso',                         type:'date' },
-    { label:'Scadenza Corso',      field:'Scadenza Corso',                     type:'date' },
-    { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',           type:'text' },
+    { label:'ID Socio',                field:'Id Dipendente (N° Socio)',            type:'text' },
+    { label:'Cognome',                 field:'Cognome',                             type:'text' },
+    { label:'Nome',                    field:'Nome',                                type:'text' },
+    { label:'Data di Nascita',         field:'Data di nascita',                     type:'date' },
+    { label:'Luogo di nascita',        field:'Luogo di nascita',                    type:'text' },
+    { label:'Codice Fiscale',          field:'Codice Fiscale',                      type:'text' },
+    { label:'Azienda',                 field:'Azienda',                             type:'select', opts:'aziende' },
+    { label:'Stato Dipendente',        field:'Stato Dipendente',                    type:'select', opts:'statoDip' },
+    { label:'Mansione',                field:'Mansione',                            type:'select', opts:'mansioni' },
+    { label:'Appalto / Sede',          field:'Appalto / sede di lavoro',            type:'text' },
+    { label:'Data assunzione',         field:'Data assunzione',                     type:'date' },
+    { label:'Tipologia Corso',         field:'Tipologia Corso',                     type:'select', opts:'tipologiaCorso' },
+    { label:'Data Corso',              field:'Data Corso',                          type:'date' },
+    { label:'Scadenza Corso',          field:'Scadenza Corso',                      type:'date' },
+    { label:'Stato Corso',             field:'Stato Corso',                         type:'select', opts:'statoCoro' },
+    { label:'Stato Attestato',         field:'Stato Attestato',                     type:'select', opts:'statoAttestato' },
+    { label:'Note',                    field:'Note',                                type:'text' },
   ],
   sorveglianza: [
-    { label:'ID Socio',            field:'Id Dipendente (N° Socio)',           type:'text' },
-    { label:'Cognome',             field:'Cognome',                            type:'text' },
-    { label:'Nome',                field:'Nome',                               type:'text' },
-    { label:'Data di Nascita',     field:'Data di nascita',                    type:'date' },
-    { label:'Azienda',             field:'Azienda',                            type:'select', opts:'aziende' },
-    { label:'Stato Dipendente',    field:'Stato dipendente',                   type:'select', opts:'statoDip' },
-    { label:'Mansione',            field:'Mansione',                           type:'select', opts:'mansioni' },
-    { label:'Stato Idoneità',      field:'Stato idoneità',                     type:'select', opts:'idoneo' },
-    { label:'Analisi',             field:'Analisi',                            type:'select', opts:'analisi' },
-    { label:'Laboratorio',         field:'Laboratorio Analisi',                type:'select', opts:'labAnalisi' },
-    { label:'Medico',              field:'Medico',                             type:'text' },
-    { label:'Data visita medica',  field:'Data visita medica',                 type:'date' },
-    { label:'Scadenza Idoneità',   field:'Scadenza Idoneità',                  type:'date' },
-    { label:'Data Analisi',        field:'Data Analisi',                       type:'date' },
-    { label:'Appalto / Sede',      field:'Appalto / sede di lavoro',           type:'text' },
+    { label:'ID Socio',                field:'Id Dipendente (N° Socio)',            type:'text' },
+    { label:'Cognome',                 field:'Cognome',                             type:'text' },
+    { label:'Nome',                    field:'Nome',                                type:'text' },
+    { label:'Data di Nascita',         field:'Data di nascita',                     type:'date' },
+    { label:'Luogo di nascita',        field:'Luogo di nascita',                    type:'text' },
+    { label:'Codice fiscale',          field:'Codice fiscale',                      type:'text' },
+    { label:'Azienda',                 field:'Azienda',                             type:'select', opts:'aziende' },
+    { label:'Stato Dipendente',        field:'Stato dipendente',                    type:'select', opts:'statoDip' },
+    { label:'Mansione',                field:'Mansione',                            type:'select', opts:'mansioni' },
+    { label:'Appalto / Sede',          field:'Appalto / sede di lavoro',            type:'text' },
+    { label:'Data assunzione',         field:'Data assunzione',                     type:'date' },
+    { label:'Data visita medica',      field:'Data visita medica',                  type:'date' },
+    { label:'Scadenza Idoneità',       field:'Scadenza Idoneità',                   type:'date' },
+    { label:'Stato Idoneità',          field:'Stato idoneità',                      type:'select', opts:'idoneo' },
+    { label:'Analisi',                 field:'Analisi',                             type:'select', opts:'analisi' },
+    { label:'Data Analisi',            field:'Data Analisi',                        type:'date' },
+    { label:'Laboratorio Analisi',     field:'Laboratorio Analisi',                 type:'select', opts:'labAnalisi' },
+    { label:'Recapito Telefonico',     field:'Recapito telefonico',                 type:'text' },
+    { label:'Note',                    field:'Note',                                type:'text' },
+    { label:'Note Analisi',            field:'Note Analisi',                        type:'text' },
+    { label:'Note prescrizione',       field:'Note prescrizione',                   type:'text' },
   ],
   aziende: [
-    { label:'Denominazione',       field:'Denominazione Ditta',                type:'text' },
-    { label:'Partita IVA',         field:'Partita IVA',                        type:'text' },
-    { label:'Codice ATECO',        field:'Codice ATECO',                       type:'text' },
-    { label:'PEC',                 field:'PEC',                                type:'text' },
-    { label:'Email',               field:'Email',                              type:'text' },
+    { label:'Denominazione',           field:'Denominazione Ditta',                 type:'text' },
+    { label:'Partita IVA',             field:'Partita IVA',                         type:'text' },
+    { label:'Codice ATECO',            field:'Codice ATECO',                        type:'text' },
+    { label:'PEC',                     field:'PEC',                                 type:'text' },
+    { label:'Email',                   field:'Email',                               type:'text' },
   ],
-};
+}
 
 // Operatori per tipo di campo
 const ADV_OPS_TEXT = [
