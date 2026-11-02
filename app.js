@@ -80,7 +80,28 @@ const Store = {
     // da Contratti → Dipendenti per tutti i record dove Dipendenti li ha vuoti.
     // Questo risolve i casi in cui il dato esiste in Contratti ma non è mai stato
     // sincronizzato in Dipendenti (es. record creati prima dell'aggiunta di questa logica).
+    this._ensureRecordIds();
     this._retroSyncDateFromContratti();
+  },
+
+  // I record importati da data_embedded.js non hanno _id. Gli allegati sono collegati al record
+  // tramite _id: senza, ad ogni apertura del form veniva generato un id temporaneo diverso e i PDF
+  // caricati restavano sul NAS ma non venivano più trovati. L'id è deterministico così due PC
+  // che lo assegnano contemporaneamente ottengono lo stesso valore.
+  _ensureRecordIds(){
+    const hash = s => { let h=2166136261; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619); } return (h>>>0).toString(36); };
+    ['dipendenti','contratti','formazione','sorveglianza','aziende'].forEach(t=>{
+      const rows=this.data[t]?.rows; if(!rows) return;
+      let changed=false;
+      rows.forEach((r,i)=>{
+        if(r && !r._id){
+          const socio=r['N° Socio']||r['Id Dipendente (N° Socio)']||'';
+          r._id='m'+hash(t+'|'+i+'|'+socio+'|'+(r['Cognome']||'')+'|'+(r['Nome']||''))+i.toString(36);
+          changed=true;
+        }
+      });
+      if(changed){ console.log('Store: assegnati _id mancanti in', t); this.save(t); }
+    });
   },
 
   // Copia Data fine rapporto e Data Assunzione da Contratti verso Dipendenti
@@ -158,7 +179,7 @@ const Store = {
     if(['contratti','formazione','sorveglianza'].includes(t)) this._ensureDipendenteExists(row);
   },
   updateRow(t,idx,row){
-    const id=this.data[t].rows[idx]?._id;
+    const id=this.data[t].rows[idx]?._id || ('m'+Date.now().toString(36)+Math.random().toString(36).slice(2,6));
     this.data[t].rows[idx]={...row,_id:id};
     this.save(t);
     if(['dipendenti','contratti','formazione','sorveglianza'].includes(t)) this._syncAllTablesForSocio(this.data[t].rows[idx]);
@@ -325,7 +346,7 @@ const OPT = {
   tipoContratto: ['Tempo determinato','Tempo indeterminato','Lavoro intermittente'],
   orario: ['Full Time','Part time'],
   oreSettimanali: ['15','18','20','21','24','25','30','34','36','38','40'],
-  livello: ["1°",'3','4','5','6','6.1','B1','B2','C1','C2','D1','D2','E1'],
+  livello: ['1','2','3','4','5','6','6.1','7','B1','B2','C1','C2','D1','D2','D2.1'],
   causaFine: ['Dimissioni','Dimissioni concludenti','Dimissioni in prova','Licenziamento','Non superamento prova','Scadenza contratto'],
   incentivi: ['SI','NO'],
   assistenza: ['Sì','No'],
@@ -820,6 +841,31 @@ const Allegati = {
 };
 
 // ─── SEZIONI FORM PER TABELLA ─────────────────────────────────────────────────
+// Etichette personalizzate per campo — sovrascrivono il nome del campo nel form e nelle colonne
+const FIELD_LABELS = {
+  dipendenti:   { 'Note': 'Note Dipendenti' },
+  contratti:    { 'Note': 'Note Contratti' },
+  formazione:   { 'Note': 'Note Formazione' },
+  sorveglianza: { 'Note': 'Note Sorveglianza' },
+};
+
+// Restituisce l'etichetta da mostrare per un campo in una tabella
+function fieldLabel(table, field){
+  return (FIELD_LABELS[table]?.[field]) || field;
+}
+
+// Campi obbligatori per tabella — se vuoti bloccano il salvataggio e vengono evidenziati in rosso
+const REQUIRED_FIELDS = {
+  dipendenti: [
+    'Azienda','Cognome','Nome','Data di Nascita','Luogo di Nascita','Cittadinanza',
+    'Codice Fiscale','Comune Residenza','Provincia Residenza','N° Socio','Data Delibera Ammissione',
+  ],
+  contratti: [
+    'Stato Dipendente','Mansione','Livello','Tipologia contrattuale',
+    'Ore contrattuali settimanali','Data Assunzione',
+  ],
+};
+
 const SECTIONS = {
   dipendenti: [
     {t:'👤 Dati Anagrafici',       c:['Cognome','Nome','Data di Nascita','Luogo di Nascita','Sesso','Cittadinanza','Codice Fiscale']},
@@ -1499,7 +1545,8 @@ const App = {
         (Auth.can('stats')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.openStats()">📊 Statistiche per Anno</button>':'')+
         '<button class="btn btn-ghost" style="font-size:13px" onclick="App.exportGestionale()">↓ Esporta Gestionale</button>' +
         '<button class="btn btn-primary" style="font-size:13px" onclick="App.importGestionale()">📂 Importa Gestionale</button>' +
-        (Auth.can('manage_users')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.cleanupEmptyAttachments()" title="Rimuove allegati PDF da 0 byte e i duplicati (mantenendo solo la copia più recente)">🧹 Pulisci Allegati</button>':'');
+        (Auth.can('manage_users')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.cleanupEmptyAttachments()" title="Rimuove allegati PDF da 0 byte e i duplicati (mantenendo solo la copia più recente)">🧹 Pulisci Allegati</button>':'') +
+        (Auth.can('manage_users')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.openOrphanAttachments()" title="PDF presenti sul NAS ma non collegati a nessun record">🔗 Allegati orfani</button>':'');
       topbarEl.appendChild(btnWrap);
     }
 
@@ -1881,7 +1928,9 @@ const App = {
         }
         const def=FIELDS[c];
         const wide=def?.type==='radio'||def?.type==='textarea'||c.toLowerCase().includes('note')||c.toLowerCase().includes('indirizzo');
-        html+=`<div class="form-group ${wide?'full':''}"><label class="field-label">${esc(c)}</label>${buildField(c,row?row[c]:'')}</div>`;
+        const isRequired = (REQUIRED_FIELDS[t]||[]).includes(c);
+        const reqMark = isRequired ? ' <span style="color:var(--danger);font-weight:700" title="Campo obbligatorio">*</span>' : '';
+        html+=`<div class="form-group ${wide?'full':''}"><label class="field-label">${esc(fieldLabel(t,c))}${reqMark}</label>${buildField(c,row?row[c]:'')}</div>`;
       }
       html+='</div></div>';
     }
@@ -1895,6 +1944,7 @@ const App = {
       let recordId;
       if(idx !== null){
         const row = Store.getRows(t)[idx];
+        if(row && !row._id){ row._id = 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); Store.save(t); }
         recordId = row?._id || ('new_'+Date.now());
       } else {
         // Nuovo record: usa un ID temporaneo salvato in _formState
@@ -1919,7 +1969,7 @@ const App = {
     this.openModal();
   },
 
-  saveForm(){
+  async saveForm(){
     const {table,idx,cols}=_formState;
     if(!table||!cols||cols.length===0){
       toast('Errore interno: riprova','error');
@@ -1977,6 +2027,20 @@ const App = {
         }
       } catch(e){ row[c]=''; }
     }
+    // Validazione campi obbligatori
+    const requiredFields = REQUIRED_FIELDS[table] || [];
+    if(requiredFields.length){
+      const missing = requiredFields.filter(f => {
+        const v = String(row[f]||'').trim();
+        return !v || v === '-- seleziona --';
+      });
+      if(missing.length){
+        const labels = missing.map(f=>fieldLabel(table,f)).join(', ');
+        toast(`⚠️ Campi obbligatori mancanti: ${labels}`, 'error');
+        return;
+      }
+    }
+
     // Controllo unicità N° Socio
     const nSocioFields = { dipendenti:'N° Socio', contratti:'Id Dipendente (N° Socio)', formazione:'Id Dipendente (N° Socio)', sorveglianza:'Id Dipendente (N° Socio)' };
     const nSocioField = nSocioFields[table];
@@ -1995,17 +2059,28 @@ const App = {
       if(idx!==null){
         Store.updateRow(table,idx,row);
         toast('Record aggiornato ✓');
-        // Nota: la sincronizzazione verso Contratti/Formazione/Sorveglianza avviene già
-        // automaticamente dentro Store.updateRow tramite _propagateDipendentiFields.
       } else {
         Store.addRow(table,row);
         const newRow = Store.getRows(table)[Store.getRows(table).length-1];
         if(_formState.tempId && newRow?._id){
-          Allegati.renameTempFiles(_formState.tempId, newRow._id);
+          await Allegati.renameTempFiles(_formState.tempId, newRow._id);
         }
-        // Crea righe collegate nelle altre tabelle
         this.createRelatedRows(table, newRow);
         toast('Record aggiunto ✓');
+      }
+      // Avviso (non bloccante) se il Codice Fiscale è già presente in un altro dipendente
+      if(table === 'dipendenti' && row['Codice Fiscale'] && row['Codice Fiscale'].trim()){
+        const cfVal = String(row['Codice Fiscale']).trim().toUpperCase();
+        const currentIdx = idx !== null ? idx : Store.getRows('dipendenti').length - 1;
+        const duplicate = Store.getRows('dipendenti').find((r,i)=>{
+          if(i === currentIdx) return false;
+          return String(r['Codice Fiscale']||'').trim().toUpperCase() === cfVal;
+        });
+        if(duplicate){
+          setTimeout(()=>{
+            toast(`⚠️ Attenzione: Codice Fiscale già presente per ${duplicate['Cognome']||''} ${duplicate['Nome']||''} (${duplicate['Azienda']||''})`, 'error');
+          }, 800);
+        }
       }
       this.closeModal();
       const b=document.getElementById('badge-'+table);
@@ -2829,7 +2904,7 @@ const App = {
 
     const allColNames = allColsList.map(x=>x.col);
     const defaultCols = (s.cols&&s.cols.length) ? s.cols.filter(c=>allColNames.includes(c)) : srcCols.slice(0,8);
-    const current = CustomCols.get('qs_'+searchId, null) || defaultCols;
+    const current = getQsCustomCols(s) || defaultCols;
     const active = current.filter(c=>allColNames.includes(c));
     const availableItems = allColsList.filter(x=>!active.includes(x.col));
 
@@ -3603,6 +3678,87 @@ const App = {
   }
 };
 
+
+// ─── ALLEGATI ORFANI ──────────────────────────────────────────────────────────
+// Elenca i PDF presenti nella cartella allegati del NAS il cui id record non corrisponde a
+// nessun record esistente, e permette di riassegnarli a un record.
+App.openOrphanAttachments = async function(){
+  const base = Store._nasBase();
+  if(!base){ toast('Funzione disponibile solo con NAS configurato','error'); return; }
+  const el=(tag,css,text)=>{ const e=document.createElement(tag); if(css) e.style.cssText=css; if(text!==undefined) e.textContent=text; return e; };
+  document.getElementById('modal-title').textContent='🔗 Allegati orfani';
+  const body=document.getElementById('modal-body'), footer=document.getElementById('modal-footer');
+  body.innerHTML=''; body.appendChild(el('p','color:var(--text3)','Analisi della cartella allegati in corso…'));
+  footer.innerHTML='';
+  const bClose=el('button',null,'Chiudi'); bClose.className='btn btn-ghost'; bClose.onclick=()=>App.closeModal();
+  footer.appendChild(bClose);
+  document.getElementById('modal-overlay').classList.add('open');
+
+  let files;
+  try{
+    const r=await fetch(`${base}/files/list-all`,{cache:'no-store'});
+    if(!r.ok) throw new Error('risposta '+r.status+' — carica anche il nuovo server.js sul NAS e riavvia il container gestionale-api');
+    files=await r.json();
+  }catch(e){ body.innerHTML=''; body.appendChild(el('p','color:var(--danger)','Errore: '+e.message)); return; }
+
+  const TABLES=['dipendenti','contratti','formazione','sorveglianza'];
+  const known=new Set();
+  TABLES.forEach(t=>Store.getRows(t).forEach(r=>{ if(r._id) known.add(String(r._id)); }));
+  const valid=files.filter(f=>f.recordId && f.size>0);
+  const orphans=valid.filter(f=>!known.has(f.recordId));
+  const groups={};
+  orphans.forEach(f=>{ (groups[f.recordId]=groups[f.recordId]||[]).push(f); });
+  const list=Object.entries(groups).map(([id,fs])=>({id,files:fs.sort((a,b)=>new Date(b.date)-new Date(a.date))}))
+    .sort((a,b)=>new Date(b.files[0].date)-new Date(a.files[0].date));
+  const tableOfSlot=slot=>TABLES.find(t=>(ALLEGATI_SLOTS[t]||[]).some(s=>s.slot===slot));
+
+  body.innerHTML='';
+  body.appendChild(el('p','font-size:13px;margin-bottom:10px',
+    `${valid.length} PDF sul NAS · ${valid.length-orphans.length} collegati a un record · ${orphans.length} orfani (${list.length} gruppi)`));
+  if(!list.length){ body.appendChild(el('p','color:var(--text3)','Nessun allegato orfano: tutti i PDF sono collegati a un record.')); return; }
+  body.appendChild(el('p','font-size:12px;color:var(--text3);margin-bottom:10px',
+    'Scegli il record corretto per ogni gruppo e premi Assegna: il PDF comparirà nella scheda di quel record.'));
+
+  list.slice(0,150).forEach((g,gi)=>{
+    const isTemp=/^(new_|tmp_)/.test(g.id);
+    const slot=g.files[0].slot, table=tableOfSlot(slot);
+    const slotLabel=table?((ALLEGATI_SLOTS[table].find(s=>s.slot===slot)||{}).label||slot):slot;
+    const card=el('div','border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px');
+    card.appendChild(el('div','font-size:12px;color:var(--text3);margin-bottom:4px',
+      `${slotLabel} · ${table?TABLE_META[table].label:'tabella sconosciuta'} · ${isTemp?'caricato su un record senza ID':'record non più esistente'} · ${new Date(g.files[0].date).toLocaleDateString('it-IT')}`));
+    g.files.forEach(f=>{
+      const row=el('div','font-size:13px');
+      const a=el('a',null,f.originalName); a.href=`${base}/files/preview/${encodeURIComponent(f.filename)}`; a.target='_blank'; a.rel='noopener';
+      row.appendChild(a); row.appendChild(el('span','color:var(--text3);font-size:11px',` (${Math.round(f.size/1024)} KB)`));
+      card.appendChild(row);
+    });
+    if(table){
+      const recs=Store.getRows(table).filter(r=>r._id).map(r=>({
+        id:r._id,
+        label:`${r['Cognome']||''} ${r['Nome']||''} — ${r['N° Socio']||r['Id Dipendente (N° Socio)']||''}`.trim()
+      }));
+      const dl=el('datalist'); dl.id='orph-dl-'+gi;
+      recs.forEach(x=>{ const o=document.createElement('option'); o.value=x.label; dl.appendChild(o); });
+      const inp=el('input','width:60%;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px;margin-top:6px');
+      inp.setAttribute('list',dl.id); inp.placeholder='Cerca record (cognome, nome o N° socio)…';
+      const btn=el('button','margin-left:6px',' Assegna'); btn.className='btn btn-primary'; btn.textContent='Assegna';
+      btn.onclick=async()=>{
+        const rec=recs.find(x=>x.label===inp.value.trim());
+        if(!rec){ toast('Scegli un record dall\'elenco','error'); return; }
+        try{
+          const r=await fetch(`${base}/files/rename`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({oldId:g.id,newId:rec.id})});
+          if(!r.ok) throw new Error('risposta '+r.status);
+          toast('Allegato assegnato a '+rec.label+' ✓');
+          App.openOrphanAttachments();
+        }catch(e){ toast('Errore: '+e.message,'error'); }
+      };
+      card.appendChild(dl); card.appendChild(inp); card.appendChild(btn);
+    }
+    body.appendChild(card);
+  });
+  if(list.length>150) body.appendChild(el('p','color:var(--text3);font-size:12px',`Mostrati i 150 gruppi più recenti su ${list.length}.`));
+};
+
 // ─── BOOT ─────────────────────────────────────────────────────────────────────
 window.addEventListener('keydown',e=>App.handleKey(e));
 ['login-user','login-pass'].forEach(id=>document.getElementById(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')App.login();}));
@@ -3691,7 +3847,7 @@ window.addEventListener('keydown',e=>App.handleKey(e));
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 
 // ─── VERSIONE ────────────────────────────────────────────────────────────────
-const APP_VERSION = '2026-07-09-A';
+const APP_VERSION = '2026-07-22-A';
 
 
 // Campi disponibili per tabella con tipo e opzioni
@@ -3728,7 +3884,7 @@ const ADV_FIELDS = {
     { label:'Scad. Permesso Soggiorno',field:'Data scadenza Permesso Soggiorno',   type:'date' },
     { label:'Data Delibera Ammissione',field:'Data Delibera Ammissione',           type:'date' },
     { label:'Data Delibera Recesso',   field:'Data Delibera Recesso / Esclusione', type:'date' },
-    { label:'Note',                    field:'Note',                               type:'text' },
+    { label:'Note Dipendenti',        field:'Note',                               type:'text' },
   ],
   contratti: [
     { label:'ID Socio',                field:'Id Dipendente (N° Socio)',            type:'text' },
@@ -3755,7 +3911,7 @@ const ADV_FIELDS = {
     { label:'Fine 24 mesi',            field:'Fine 24 mesi',                        type:'date' },
     { label:'Requisiti Incentivi',     field:'Requisiti Incentivi',                 type:'select', opts:'incentivi' },
     { label:'Assistenza Sanitaria',    field:'Assistenza Sanitaria integrativa',    type:'select', opts:'assistenza' },
-    { label:'Note',                    field:'Note',                                type:'text' },
+    { label:'Note Contratti',       field:'Note',                                type:'text' },
   ],
   formazione: [
     { label:'ID Socio',                field:'Id Dipendente (N° Socio)',            type:'text' },
@@ -3774,7 +3930,7 @@ const ADV_FIELDS = {
     { label:'Scadenza Corso',          field:'Scadenza Corso',                      type:'date' },
     { label:'Stato Corso',             field:'Stato Corso',                         type:'select', opts:'statoCoro' },
     { label:'Stato Attestato',         field:'Stato Attestato',                     type:'select', opts:'statoAttestato' },
-    { label:'Note',                    field:'Note',                                type:'text' },
+    { label:'Note Formazione',       field:'Note',                                type:'text' },
   ],
   sorveglianza: [
     { label:'ID Socio',                field:'Id Dipendente (N° Socio)',            type:'text' },
@@ -3795,7 +3951,7 @@ const ADV_FIELDS = {
     { label:'Data Analisi',            field:'Data Analisi',                        type:'date' },
     { label:'Laboratorio Analisi',     field:'Laboratorio Analisi',                 type:'select', opts:'labAnalisi' },
     { label:'Recapito Telefonico',     field:'Recapito telefonico',                 type:'text' },
-    { label:'Note',                    field:'Note',                                type:'text' },
+    { label:'Note Sorveglianza',       field:'Note',                                type:'text' },
     { label:'Note Analisi',            field:'Note Analisi',                        type:'text' },
     { label:'Note prescrizione',       field:'Note prescrizione',                   type:'text' },
   ],
@@ -3826,27 +3982,51 @@ const ADV_OPS_SELECT = [
   { value:'is_not_empty',  label:'non è vuoto' },
 ];
 const ADV_OPS_DATE = [
-  { value:'is',            label:'è uguale a' },
-  { value:'before',        label:'prima del' },
-  { value:'after',         label:'dopo il' },
-  { value:'between',       label:"nell'intervallo" },
-  { value:'today',         label:'oggi' },
-  { value:'yesterday',     label:'ieri' },
-  { value:'last_7_days',   label:'ultimi 7 giorni' },
-  { value:'last_30_days',  label:'ultimi 30 giorni' },
-  { value:'last_60_days',  label:'ultimi 60 giorni' },
-  { value:'last_90_days',  label:'ultimi 90 giorni' },
-  { value:'last_120_days', label:'ultimi 120 giorni' },
-  { value:'next_7_days',   label:'prossimi 7 giorni' },
-  { value:'next_30_days',  label:'prossimi 30 giorni' },
-  { value:'next_60_days',  label:'prossimi 60 giorni' },
-  { value:'next_90_days',  label:'prossimi 90 giorni' },
-  { value:'next_120_days', label:'prossimi 120 giorni' },
-  { value:'this_month',    label:'questo mese' },
-  { value:'last_month',    label:'mese scorso' },
-  { value:'this_year',     label:"quest'anno" },
-  { value:'is_empty',      label:'è vuoto' },
-  { value:'is_not_empty',  label:'non è vuoto' },
+  { value:'is',              label:'è uguale a' },
+  { value:'before',          label:'prima del' },
+  { value:'after',           label:'dopo il' },
+  { value:'between',         label:"nell'intervallo" },
+  { value:'is_empty',        label:'è vuoto' },
+  { value:'is_not_empty',    label:'non è vuoto' },
+  { value:'today',           label:'Oggi' },
+  { value:'yesterday',       label:'Ieri' },
+  { value:'tomorrow',        label:'Domani' },
+  { value:'today_or_after',  label:'Oggi o dopo' },
+  { value:'last_7_days',     label:'Precedenti 7 giorni' },
+  { value:'last_30_days',    label:'Precedenti 30 giorni' },
+  { value:'last_60_days',    label:'Precedenti 60 giorni' },
+  { value:'last_90_days',    label:'Precedenti 90 giorni' },
+  { value:'last_120_days',   label:'Precedenti 120 giorni' },
+  { value:'next_7_days',     label:'I seguenti 7 giorni' },
+  { value:'next_30_days',    label:'I seguenti 30 giorni' },
+  { value:'next_60_days',    label:'I seguenti 60 giorni' },
+  { value:'next_90_days',    label:'I seguenti 90 giorni' },
+  { value:'next_120_days',   label:'I seguenti 120 giorni' },
+  { value:'next_n_days',     label:'I seguenti N giorni' },
+  { value:'last_n_days',     label:'N giorni precedenti' },
+  { value:'last_week',       label:'Ultima settimana' },
+  { value:'this_week',       label:'Questa settimana' },
+  { value:'next_week',       label:'La prossima settimana' },
+  { value:'this_and_last_week',  label:'Attuale e ultima settimana' },
+  { value:'this_and_next_week',  label:'Attuale e la prossima settimana' },
+  { value:'next_n_weeks',    label:'Le seguenti N settimane' },
+  { value:'last_n_weeks',    label:'N settimane precedenti' },
+  { value:'last_month',      label:'Il mese scorso' },
+  { value:'this_month',      label:'In questo mese' },
+  { value:'next_month',      label:'Il mese prossimo' },
+  { value:'this_and_last_month', label:'Attuale e il mese scorso' },
+  { value:'this_and_next_month', label:'Il mese corrente e il prossimo' },
+  { value:'next_n_months',   label:'I seguenti N mesi' },
+  { value:'last_n_months',   label:'Ultimi N mesi' },
+  { value:'last_year',       label:"L'anno scorso" },
+  { value:'this_year',       label:"Quest'anno" },
+  { value:'next_year',       label:"L'anno prossimo" },
+  { value:'last_2_years',    label:'Ultimi 2 anni' },
+  { value:'next_2_years',    label:'Prossimi 2 anni' },
+  { value:'this_and_last_year',  label:"Attuale e l'anno scorso" },
+  { value:'this_and_next_year',  label:"Attuale e l'anno prossimo" },
+  { value:'next_n_years',    label:'I seguenti N anni' },
+  { value:'last_n_years',    label:'N anni precedenti' },
 ];
 
 let _advRowCount = 0;
@@ -3972,11 +4152,21 @@ App.onAdvOpChange = function(rowId, fieldDef){
   const wrap = document.getElementById('adv-val-wrap-'+rowId);
 
   // No-value operators
-  if(op === 'is_empty' || op === 'is_not_empty' || op === 'today' || op === 'yesterday' ||
-     op === 'last_7_days' || op === 'last_30_days' || op === 'last_60_days' || op === 'last_90_days' ||
-     op === 'last_120_days' || op === 'next_7_days' || op === 'next_30_days' || op === 'next_60_days' ||
-     op === 'next_90_days' || op === 'next_120_days' || op === 'this_month' || op === 'last_month' || op === 'this_year'){
+  const NO_VALUE_OPS = ['is_empty','is_not_empty','today','yesterday','tomorrow','today_or_after',
+    'last_7_days','last_30_days','last_60_days','last_90_days','last_120_days',
+    'next_7_days','next_30_days','next_60_days','next_90_days','next_120_days',
+    'last_week','this_week','next_week','this_and_last_week','this_and_next_week',
+    'last_month','this_month','next_month','this_and_last_month','this_and_next_month',
+    'last_year','this_year','next_year','last_2_years','next_2_years',
+    'this_and_last_year','this_and_next_year'];
+  if(NO_VALUE_OPS.includes(op)){
     wrap.innerHTML = '<span style="color:var(--text3);font-size:12px;line-height:36px">nessun valore richiesto</span>';
+    return;
+  }
+  // Operatori che richiedono un numero N
+  const N_VALUE_OPS = ['next_n_days','last_n_days','next_n_weeks','last_n_weeks','next_n_months','last_n_months','next_n_years','last_n_years'];
+  if(N_VALUE_OPS.includes(op)){
+    wrap.innerHTML = '<input type="number" min="1" class="adv-input" id="adv-val-'+rowId+'" placeholder="N giorni/settimane/mesi/anni" style="width:200px"/>';
     return;
   }
 
@@ -4125,16 +4315,73 @@ function evalCriterion(row, c){
     if(op==='next_60_days')  return rowISO >= today && rowISO <= daysAheadISO(60);
     if(op==='next_90_days')  return rowISO >= today && rowISO <= daysAheadISO(90);
     if(op==='next_120_days') return rowISO >= today && rowISO <= daysAheadISO(120);
-    if(op==='this_month'){
-      const m=today.slice(0,7); return rowISO.startsWith(m);
+    if(op==='tomorrow'){     const t=daysAheadISO(1); return rowISO===t; }
+    if(op==='today_or_after') return rowISO >= today;
+    // Settimane
+    if(op==='last_week'){
+      const now=new Date(); const dow=now.getDay()||7;
+      const lm=new Date(now); lm.setDate(now.getDate()-dow-6);
+      const ls=new Date(now); ls.setDate(now.getDate()-dow);
+      return rowISO>=lm.toISOString().slice(0,10) && rowISO<=ls.toISOString().slice(0,10);
     }
+    if(op==='this_week'){
+      const now=new Date(); const dow=now.getDay()||7;
+      const wm=new Date(now); wm.setDate(now.getDate()-dow+1);
+      const ws=new Date(now); ws.setDate(now.getDate()-dow+7);
+      return rowISO>=wm.toISOString().slice(0,10) && rowISO<=ws.toISOString().slice(0,10);
+    }
+    if(op==='next_week'){
+      const now=new Date(); const dow=now.getDay()||7;
+      const nm=new Date(now); nm.setDate(now.getDate()-dow+8);
+      const ns=new Date(now); ns.setDate(now.getDate()-dow+14);
+      return rowISO>=nm.toISOString().slice(0,10) && rowISO<=ns.toISOString().slice(0,10);
+    }
+    if(op==='this_and_last_week') return rowISO>=daysAgoISO(13) && rowISO<=daysAheadISO(6);
+    if(op==='this_and_next_week') return rowISO>=daysAgoISO(6)  && rowISO<=daysAheadISO(13);
+    if(op==='next_n_weeks'){  const n=parseInt(val1)||1; return rowISO>=today && rowISO<=daysAheadISO(n*7); }
+    if(op==='last_n_weeks'){  const n=parseInt(val1)||1; return rowISO>=daysAgoISO(n*7) && rowISO<=today; }
+    // Mesi
+    if(op==='this_month'){    const m=today.slice(0,7); return rowISO.startsWith(m); }
     if(op==='last_month'){
       const d=new Date(); d.setMonth(d.getMonth()-1);
-      const m=d.toISOString().slice(0,7); return rowISO.startsWith(m);
+      return rowISO.startsWith(d.toISOString().slice(0,7));
     }
-    if(op==='this_year'){
-      return rowISO.startsWith(today.slice(0,4));
+    if(op==='next_month'){
+      const d=new Date(); d.setMonth(d.getMonth()+1);
+      return rowISO.startsWith(d.toISOString().slice(0,7));
     }
+    if(op==='this_and_last_month'){
+      const d=new Date(); d.setMonth(d.getMonth()-1);
+      return rowISO.startsWith(today.slice(0,7)) || rowISO.startsWith(d.toISOString().slice(0,7));
+    }
+    if(op==='this_and_next_month'){
+      const d=new Date(); d.setMonth(d.getMonth()+1);
+      return rowISO.startsWith(today.slice(0,7)) || rowISO.startsWith(d.toISOString().slice(0,7));
+    }
+    if(op==='next_n_months'){ const n=parseInt(val1)||1; return rowISO>=today && rowISO<=daysAheadISO(n*30); }
+    if(op==='last_n_months'){ const n=parseInt(val1)||1; return rowISO>=daysAgoISO(n*30) && rowISO<=today; }
+    // Anni
+    if(op==='this_year'){     return rowISO.startsWith(today.slice(0,4)); }
+    if(op==='last_year'){
+      const y=(parseInt(today.slice(0,4))-1).toString(); return rowISO.startsWith(y);
+    }
+    if(op==='next_year'){
+      const y=(parseInt(today.slice(0,4))+1).toString(); return rowISO.startsWith(y);
+    }
+    if(op==='last_2_years'){  return rowISO>=daysAgoISO(730) && rowISO<=today; }
+    if(op==='next_2_years'){  return rowISO>=today && rowISO<=daysAheadISO(730); }
+    if(op==='this_and_last_year'){
+      const y=today.slice(0,4); const py=(parseInt(y)-1).toString();
+      return rowISO.startsWith(y)||rowISO.startsWith(py);
+    }
+    if(op==='this_and_next_year'){
+      const y=today.slice(0,4); const ny=(parseInt(y)+1).toString();
+      return rowISO.startsWith(y)||rowISO.startsWith(ny);
+    }
+    if(op==='next_n_years'){  const n=parseInt(val1)||1; return rowISO>=today && rowISO<=daysAheadISO(n*365); }
+    if(op==='last_n_years'){  const n=parseInt(val1)||1; return rowISO>=daysAgoISO(n*365) && rowISO<=today; }
+    if(op==='next_n_days'){   const n=parseInt(val1)||1; return rowISO>=today && rowISO<=daysAheadISO(n); }
+    if(op==='last_n_days'){   const n=parseInt(val1)||1; return rowISO>=daysAgoISO(n) && rowISO<=today; }
 
     // Date with value
     if(op==='before')   return rowISO && rowISO < val1;
@@ -4349,6 +4596,27 @@ function perCompanyVariants(base){
     _companyFilter: base.customFilter ? short : undefined,
     _baseId: base.id, // preserva sempre l'id originale, per identificare correttamente la ricerca "madre"
   }));
+}
+
+// Restituisce le colonne personalizzate per una ricerca rapida.
+// Prima cerca per l'id completo della variante (es. qs_custom_abc_aliante),
+// poi per l'id base (es. qs_custom_abc) — così le colonne impostate alla creazione
+// si applicano a tutte le varianti per azienda.
+function getQsCustomCols(s){
+  const direct = CustomCols.get('qs_'+s.id, null);
+  if(direct && direct.length) return direct;
+  const baseId = s._baseId || s._customBaseId;
+  if(baseId){
+    const base = CustomCols.get('qs_'+baseId, null);
+    if(base && base.length) return base;
+  }
+  // Prova anche con l'id senza il suffisso azienda (ultimo tentativo)
+  const idWithoutCompany = s.id.replace(/_[^_]+$/, '');
+  if(idWithoutCompany !== s.id){
+    const stripped = CustomCols.get('qs_'+idWithoutCompany, null);
+    if(stripped && stripped.length) return stripped;
+  }
+  return null;
 }
 
 const QUICK_SEARCHES = {
@@ -4772,8 +5040,8 @@ App.openQuickSearchEditor = function(t, existingId){
     editing = val.added.find(s=>s.id===existingId);
   }
   App._qsEditState = editing
-    ? { table:t, id:editing.id, icon:editing.icon||'⭐', label:editing.label, desc:editing.desc||'', criteria:JSON.parse(JSON.stringify(editing.criteria||[])) }
-    : { table:t, id:null, icon:'⭐', label:'', desc:'', criteria:[] };
+    ? { table:t, id:editing.id, icon:editing.icon||'⭐', label:editing.label, desc:editing.desc||'', criteria:JSON.parse(JSON.stringify(editing.criteria||[])), cols:JSON.parse(JSON.stringify(CustomCols.get('qs_'+editing.id,null)||[])) }
+    : { table:t, id:null, icon:'⭐', label:'', desc:'', criteria:[], cols:[] };
   App._renderQuickSearchEditor();
 };
 
@@ -4781,6 +5049,43 @@ App._renderQuickSearchEditor = function(){
   const st = App._qsEditState;
   const fields = ADV_FIELDS[st.table] || [];
   document.getElementById('modal-title').textContent = st.id ? '✎ Modifica Ricerca Rapida' : '➕ Nuova Ricerca Rapida';
+
+  // Inizializza colonne se non presenti
+  if(!st.cols) st.cols = [];
+
+  // Costruisce lista colonne da tutte le tabelle collegate
+  const ALL_TABLES = ['dipendenti','contratti','formazione','sorveglianza'];
+  const allColsList = [];
+  const seen = new Set();
+  const srcTable = st.table;
+  Store.getCols(srcTable).map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(c=>c&&!SKIP.has(c)&&c!=='_id').forEach(c=>{
+    if(!seen.has(c)){ seen.add(c); allColsList.push({col:c, label:c}); }
+  });
+  ALL_TABLES.filter(tb=>tb!==srcTable).forEach(tb=>{
+    const tLabel = TABLE_META[tb]?.label||tb;
+    Store.getCols(tb).map(c=>typeof c==='string'?c:(c.name||c.field||'')).filter(c=>c&&!SKIP.has(c)&&c!=='_id').forEach(c=>{
+      if(!seen.has(c)){ seen.add(c); allColsList.push({col:c, label:`[${tLabel}] ${c}`}); }
+    });
+  });
+
+  const activeCols = st.cols.filter(c=>allColsList.some(x=>x.col===c));
+  const availItems = allColsList.filter(x=>!activeCols.includes(x.col));
+
+  const colsActiveHtml = activeCols.length
+    ? activeCols.map((c,i)=>`
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:12px">
+          <span style="cursor:grab;color:var(--text3)">⠿</span>
+          <span style="flex:1">${esc(c)}</span>
+          <button onclick="App._qsColRemove(${i})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:14px">✕</button>
+        </div>`).join('')
+    : `<p style="color:var(--text3);font-size:12px;padding:4px">Nessuna colonna selezionata — verranno usate le colonne di default</p>`;
+
+  const colsAvailHtml = availItems.map(item=>`
+    <div onclick="App._qsColAdd('${esc(item.col)}')"
+      style="padding:4px 8px;cursor:pointer;border-radius:4px;font-size:12px;display:flex;align-items:center;gap:6px"
+      onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''">
+      <span style="color:var(--accent)">＋</span> ${esc(item.label)}
+    </div>`).join('');
 
   const critRows = st.criteria.map((c, ci) => {
     const fieldDef = fields.find(f=>f.field===c.field) || fields[0] || {type:'text'};
@@ -4847,12 +5152,41 @@ App._renderQuickSearchEditor = function(){
       <label class="field-label">Criteri di filtro (tutti applicati insieme, in AND)</label>
       <div id="qs-criteria">${critRows || '<p style="color:var(--text3);font-size:12px">Nessun criterio: la ricerca mostrerà tutti i record.</p>'}</div>
       <button class="btn btn-ghost" style="font-size:12px;margin-top:6px" onclick="App._qsAddCrit()">+ Aggiungi criterio</button>
+    </div>
+    <div class="form-group" style="margin-top:12px">
+      <label class="field-label">Colonne da mostrare nei risultati</label>
+      <p style="font-size:11px;color:var(--text3);margin-bottom:6px">Se non selezioni nulla vengono usate le colonne di default. Le colonne in grigio provengono da altre tabelle.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:4px">Colonne visibili</div>
+          <div id="qs-cols-active" style="min-height:60px;border:1px solid var(--border);border-radius:6px;padding:6px;display:flex;flex-direction:column;gap:3px">
+            ${colsActiveHtml}
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--text3);margin-bottom:4px">Colonne disponibili</div>
+          <div id="qs-cols-avail" style="min-height:60px;max-height:200px;overflow-y:auto;border:1px dashed var(--border);border-radius:6px;padding:6px">
+            ${colsAvailHtml}
+          </div>
+        </div>
+      </div>
     </div>`;
 
   document.getElementById('modal-footer').innerHTML = `
     <button class="btn btn-ghost" onclick="App.openQuickSearches('${st.table}')">Annulla</button>
     <button class="btn btn-primary" onclick="App._qsSave()">💾 Salva Ricerca</button>`;
   App.openModal();
+};
+
+App._qsColAdd = function(col){
+  if(!App._qsEditState.cols) App._qsEditState.cols = [];
+  if(!App._qsEditState.cols.includes(col)) App._qsEditState.cols.push(col);
+  App._renderQuickSearchEditor();
+};
+App._qsColRemove = function(i){
+  if(!App._qsEditState.cols) return;
+  App._qsEditState.cols.splice(i,1);
+  App._renderQuickSearchEditor();
 };
 
 App._qsAddCrit = function(){
@@ -4899,7 +5233,7 @@ App._qsSave = async function(){
   const searchDef = {
     id, icon, label, desc,
     table: st.table,
-    cols: (ADV_FIELDS[st.table]||[]).map(f=>f.field), // mostra tutte le colonne note per questa tabella
+    cols: (ADV_FIELDS[st.table]||[]).map(f=>f.field), // colonne default (sovrascrivibili con CustomCols)
     criteria: st.criteria,
   };
 
@@ -4909,6 +5243,14 @@ App._qsSave = async function(){
   } else {
     await CustomQuickSearches.addSearch(st.table, searchDef);
     toast('Ricerca rapida creata ✓');
+  }
+  // Salva le colonne personalizzate se ne sono state selezionate
+  // Usa sempre l'id base (senza suffisso azienda) così si applica a tutte le varianti
+  const colsSaveId = id; // l'id è già quello base al momento della creazione/modifica
+  if(st.cols && st.cols.length){
+    await CustomCols.save('qs_'+colsSaveId, st.cols);
+  } else if(st.id){
+    CustomCols.reset('qs_'+colsSaveId);
   }
   App._qsEditState = null;
   App.openQuickSearches(st.table);
@@ -4957,7 +5299,7 @@ App.runQuickSearch = function(t, id){
     : storeColNames.filter(c => c && c !== '_id');
   // Usa colonne personalizzate se presenti (chiave: qs_<id>)
   // Non filtriamo per storeColNames perché le cols custom possono venire da tabelle diverse
-  const customQsCols = CustomCols.get('qs_'+id, null);
+  const customQsCols = getQsCustomCols(s);
   const cols = (customQsCols && customQsCols.length)
     ? customQsCols
     : defaultCols;
@@ -5044,7 +5386,7 @@ App.applyQuickFilter = function(t, id){
   document.getElementById('search-input').value = '';
   App.page = 1;
   // Applica temporaneamente le colonne personalizzate della ricerca rapida alla tabella
-  const customQsCols = CustomCols.get('qs_'+id, null);
+  const customQsCols = getQsCustomCols(s);
   if(customQsCols && customQsCols.length){
     // Salva le colonne ATTUALI della tabella (quelle vere, prima di qualsiasi sovrascrittura)
     // solo se non è già stato salvato un backup (evita di sovrascrivere il backup con cols di un'altra ricerca)
@@ -5082,7 +5424,7 @@ App.printQuickResult = function(id, t){
   // Usa colonne personalizzate se presenti, altrimenti default
   const storeColNames = storeCols.map(c => typeof c === 'string' ? c : (c.name||c.field||''));
   const defaultCols = (s.cols && s.cols.length) ? s.cols.filter(c=>c!=='__proroga_max') : storeColNames.filter(c=>c&&c!=='_id');
-  const customQsCols = CustomCols.get('qs_'+id, null);
+  const customQsCols = getQsCustomCols(s);
   const cols = (customQsCols && customQsCols.length) ? customQsCols : defaultCols;
 
   // Cross-table lookup
@@ -5159,7 +5501,7 @@ App.exportQuickResult = function(id, t){
 
     // Usa colonne personalizzate se presenti
     const defaultCols = s.cols && s.cols.length ? s.cols.filter(c=>c!=='__proroga_max') : storeColNames.filter(c=>c&&c!=='_id');
-    const customQsCols = CustomCols.get('qs_'+id, null);
+    const customQsCols = getQsCustomCols(s);
     const cols = (customQsCols && customQsCols.length) ? customQsCols : defaultCols;
     if(!cols.length){ toast('Nessuna colonna da esportare','error'); return; }
 
