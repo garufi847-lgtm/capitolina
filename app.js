@@ -1545,8 +1545,7 @@ const App = {
         (Auth.can('stats')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.openStats()">📊 Statistiche per Anno</button>':'')+
         '<button class="btn btn-ghost" style="font-size:13px" onclick="App.exportGestionale()">↓ Esporta Gestionale</button>' +
         '<button class="btn btn-primary" style="font-size:13px" onclick="App.importGestionale()">📂 Importa Gestionale</button>' +
-        (Auth.can('manage_users')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.cleanupEmptyAttachments()" title="Rimuove allegati PDF da 0 byte e i duplicati (mantenendo solo la copia più recente)">🧹 Pulisci Allegati</button>':'') +
-        (Auth.can('manage_users')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.openOrphanAttachments()" title="PDF presenti sul NAS ma non collegati a nessun record">🔗 Allegati orfani</button>':'');
+        (Auth.can('manage_users')?'<button class="btn btn-ghost" style="font-size:13px" onclick="App.cleanupEmptyAttachments()" title="Rimuove allegati PDF da 0 byte e i duplicati (mantenendo solo la copia più recente)">🧹 Pulisci Allegati</button>':'');
       topbarEl.appendChild(btnWrap);
     }
 
@@ -1581,7 +1580,14 @@ const App = {
             </td>
           </tr>`
         ).join('')+'</table>')+
-      '</div>';
+      '</div>'+
+      (Auth.can('manage_users')?
+        '<div class="panel" style="margin-top:16px"><div class="panel-header">📎 Strumenti allegati</div><div class="panel-body">'+
+        '<p style="font-size:13px;color:var(--text3);margin-bottom:10px">Controlla i PDF presenti nella cartella allegati del NAS.</p>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button class="btn btn-primary" onclick="App.openOrphanAttachments()" title="PDF presenti sul NAS ma non collegati a nessun record">🔗 Allegati orfani</button>'+
+        '<button class="btn btn-ghost" onclick="App.cleanupEmptyAttachments()" title="Rimuove PDF da 0 byte e duplicati">🧹 Pulisci Allegati</button>'+
+        '</div></div></div>':'');
   },
 
   // ── TABELLA ────────────────────────────────────────────────────────────────
@@ -3847,7 +3853,7 @@ window.addEventListener('keydown',e=>App.handleKey(e));
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 
 // ─── VERSIONE ────────────────────────────────────────────────────────────────
-const APP_VERSION = '2026-07-22-A';
+const APP_VERSION = '2026-07-22-B';
 
 
 // Campi disponibili per tabella con tipo e opzioni
