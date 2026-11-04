@@ -629,6 +629,7 @@ const Allegati = {
   // Apri modale allegati per un record
   async openModal(table, recordId, slotDef){
     const { label, slot, single } = slotDef;
+    this._cur = { table, recordId, slotDef };
 
     // Usa un overlay DEDICATO e separato da quello del form (vedi index.html,
     // #allegati-modal-overlay), così il form di Aggiungi/Modifica sottostante resta
@@ -658,12 +659,95 @@ const Allegati = {
           ➕ ${single ? 'Carica PDF (sostituisce)' : 'Aggiungi PDF'}
           <input type="file" accept=".pdf" style="display:none" id="file-input-${slot}" onchange="Allegati.upload('${table}','${recordId}','${slot}',${single},this)"/>
         </label>
+        ${base ? '<button class="btn btn-ghost" style="margin-left:8px" onclick="Allegati.openOrphanPicker()" title="Cerca tra i PDF presenti sul NAS ma non collegati a nessun record">🔗 Assegna PDF orfano</button>' : ''}
       </div>
       <div id="allegati-list-${slot}">${list}</div>`;
 
     document.getElementById('allegati-modal-footer').innerHTML =
       `<button class="btn btn-primary" onclick="Allegati.closeAndRestoreForm()">← Torna al modulo</button>`;
     document.getElementById('allegati-modal-overlay').classList.add('open');
+  },
+
+  // ── Assegna PDF orfano ──────────────────────────────────────────────────────
+  // Mostra i PDF presenti sul NAS che non appartengono a nessun record e permette di
+  // assegnarne uno al record e allo slot attualmente aperti, senza cercare il dipendente.
+  async openOrphanPicker(){
+    const cur = this._cur; if(!cur) return;
+    const { table, recordId, slotDef } = cur;
+    const base = this.base(); if(!base){ toast('Funzione disponibile solo con NAS configurato','error'); return; }
+    const el=(tag,css,text)=>{ const e=document.createElement(tag); if(css) e.style.cssText=css; if(text!==undefined) e.textContent=text; return e; };
+    const body=document.getElementById('allegati-modal-body'), footer=document.getElementById('allegati-modal-footer');
+    document.getElementById('allegati-modal-title').textContent='🔗 Assegna PDF orfano — '+slotDef.label;
+    body.innerHTML=''; body.appendChild(el('p','color:var(--text3)','Ricerca dei PDF orfani sul NAS…'));
+    footer.innerHTML='';
+    const back=el('button',null,'← Indietro'); back.className='btn btn-primary'; back.onclick=()=>Allegati.openModal(table,recordId,slotDef);
+    footer.appendChild(back);
+
+    let files;
+    try{
+      const r=await fetch(`${base}/files/list-all`,{cache:'no-store'});
+      if(!r.ok) throw new Error('risposta '+r.status+' — aggiorna anche server.js sul NAS e riavvia il container');
+      files=await r.json();
+    }catch(e){ body.innerHTML=''; body.appendChild(el('p','color:var(--danger)','Errore: '+e.message)); return; }
+
+    const known=new Set([String(recordId)]);
+    ['dipendenti','contratti','formazione','sorveglianza'].forEach(t=>Store.getRows(t).forEach(r=>{ if(r._id) known.add(String(r._id)); }));
+    const orphans=files.filter(f=>f.recordId && f.size>0 && !known.has(f.recordId))
+      .sort((a,b)=>new Date(b.date)-new Date(a.date));
+    const slotLabelOf=s=>{ for(const t of Object.keys(ALLEGATI_SLOTS)){ const x=(ALLEGATI_SLOTS[t]||[]).find(y=>y.slot===s); if(x) return x.label; } return s; };
+
+    body.innerHTML='';
+    body.appendChild(el('p','font-size:13px;margin-bottom:8px',
+      `${orphans.length} PDF orfani sul NAS. "Assegna qui" lo collega a questo record, nella sezione "${slotDef.label}".`));
+    const tools=el('div','display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px');
+    const search=el('input','flex:1;min-width:180px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px');
+    search.placeholder='Filtra per nome file…';
+    const chkLbl=el('label','font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer');
+    const chk=document.createElement('input'); chk.type='checkbox';
+    chkLbl.appendChild(chk); chkLbl.appendChild(document.createTextNode('Mostra anche altri tipi di allegato'));
+    tools.appendChild(search); tools.appendChild(chkLbl); body.appendChild(tools);
+    const listEl=el('div'); body.appendChild(listEl);
+
+    const assign=async(f)=>{
+      try{
+        // slot a file singolo: il nuovo PDF sostituisce quello eventuale già presente
+        let previous=[];
+        if(slotDef.single){
+          try{ const r0=await fetch(`${base}/files/${recordId}/${slotDef.slot}`); previous=await r0.json(); }catch(e){}
+          if(previous.length && !confirm('In questa sezione c\'è già un PDF: verrà sostituito. Continuare?')) return;
+        }
+        const r=await fetch(`${base}/files/move`,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({filename:f.filename,newId:recordId,newSlot:slotDef.slot})});
+        if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.error||('risposta '+r.status)); }
+        for(const p of previous){ try{ await fetch(`${base}/files/download/${encodeURIComponent(p.filename)}`,{method:'DELETE'}); }catch(e){} }
+        toast('PDF assegnato ✓');
+        Allegati.openModal(table,recordId,slotDef);
+      }catch(e){ toast('Errore assegnazione: '+e.message,'error'); }
+    };
+
+    const draw=()=>{
+      listEl.innerHTML='';
+      const q=search.value.trim().toLowerCase();
+      const rows=orphans.filter(f=>(chk.checked||f.slot===slotDef.slot) && (!q||f.originalName.toLowerCase().includes(q)));
+      if(!rows.length){
+        listEl.appendChild(el('p','color:var(--text3);font-size:13px',
+          chk.checked||q ? 'Nessun PDF orfano corrisponde.' : 'Nessun PDF orfano di questo tipo. Prova a spuntare "Mostra anche altri tipi di allegato".'));
+        return;
+      }
+      rows.slice(0,100).forEach(f=>{
+        const isTemp=/^(new_|tmp_)/.test(f.recordId);
+        const card=el('div','border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap');
+        const info=el('div','flex:1;min-width:200px');
+        const a=el('a','font-size:13px',f.originalName); a.href=`${base}/files/preview/${encodeURIComponent(f.filename)}`; a.target='_blank'; a.rel='noopener';
+        info.appendChild(a);
+        info.appendChild(el('div','font-size:11px;color:var(--text3)',
+          `${slotLabelOf(f.slot)} · ${Math.round(f.size/1024)} KB · ${new Date(f.date).toLocaleString('it-IT')} · ${isTemp?'record senza ID':'record non più esistente'}`));
+        const btn=el('button',null,'Assegna qui'); btn.className='btn btn-primary'; btn.style.fontSize='12px'; btn.onclick=()=>assign(f);
+        card.appendChild(info); card.appendChild(btn); listEl.appendChild(card);
+      });
+      if(rows.length>100) listEl.appendChild(el('p','font-size:12px;color:var(--text3)',`Mostrati i 100 più recenti su ${rows.length}: usa il filtro per restringere.`));
+    };
+    search.oninput=draw; chk.onchange=draw; draw();
   },
 
   // Chiude la vista allegati. Il form sottostante non è mai stato toccato, quindi
@@ -3853,7 +3937,7 @@ window.addEventListener('keydown',e=>App.handleKey(e));
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 
 // ─── VERSIONE ────────────────────────────────────────────────────────────────
-const APP_VERSION = '2026-07-22-B';
+const APP_VERSION = '2026-07-23-A';
 
 
 // Campi disponibili per tabella con tipo e opzioni
